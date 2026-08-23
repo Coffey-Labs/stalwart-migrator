@@ -24,7 +24,7 @@ func main() {
 	case "status":
 		err = runStatus(os.Args[2:])
 	case "rollback":
-		err = fmt.Errorf("not implemented yet: see internal/rollback")
+		err = runRollback(os.Args[2:])
 	case "confirm":
 		err = fmt.Errorf("not implemented yet: see internal/checkpoint")
 	case "report":
@@ -47,7 +47,7 @@ commands:
   preflight   run read-only checks and print the migration plan
   run         --dry-run: simulate and validate against a sandbox (real cutover isn't implemented yet)
   status      show the state of an in-progress or completed run
-  rollback    restore the pre-migration backup for a given run
+  rollback    restore the pre-migration backup for a given run (prints the plan; --yes to act)
   confirm     close the rollback window for a completed run
   report      print the validation report for a run`)
 }

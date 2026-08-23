@@ -10,13 +10,21 @@ import (
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory runs are checkpointed in")
-	if err := fs.Parse(args); err != nil {
+
+	// Same treatment as `rollback`: without this, `status <run-id>
+	// --state-dir X` would look up the run in the default directory and
+	// report it missing, since flag parsing stops at the run-id.
+	runID, rest := splitRunID(fs, args)
+	if err := fs.Parse(rest); err != nil {
 		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: stalwart-migrate status [run-id] [flags]")
 	}
 
 	store := checkpoint.NewStore(*stateDir)
 
-	if fs.NArg() == 0 {
+	if runID == "" {
 		ids, err := store.List()
 		if err != nil {
 			return fmt.Errorf("list runs: %w", err)
@@ -32,7 +40,6 @@ func runStatus(args []string) error {
 		return nil
 	}
 
-	runID := fs.Arg(0)
 	rs, err := store.Load(runID)
 	if err != nil {
 		return fmt.Errorf("load run %s: %w", runID, err)

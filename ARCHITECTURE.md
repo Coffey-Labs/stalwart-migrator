@@ -308,10 +308,32 @@ attempt reuses the existing backup and dumps rather than re-capturing
 (faster retry, and one fewer chance for the retry's own backup step to
 fail).
 
-**Status: not yet implemented.** `stalwart-migrate run` without `--dry-run`
-currently refuses to proceed, precisely because this phase doesn't exist yet
-— committing to a real cutover without a working rollback would violate the
-one guarantee this tool exists to provide. §4.9 covers what does work today.
+**Status: implemented** (`internal/rollback`, plus `internal/service` for
+the systemd/Docker control it needs) for the manual trigger. Departures from
+the procedure above, and what it still doesn't cover:
+
+- Only the manual trigger exists. The automatic one fires on validation
+  failure during a real cutover, and there is no real cutover to fail yet.
+- The procedure gains a step 0 this design didn't call out: the
+  backup is re-verified against its manifest *before* the service is
+  stopped. Finding a corrupt backup is survivable while the failed
+  instance is still up, and unsurvivable once the data directory has been
+  moved aside.
+- FoundationDB is refused rather than attempted: §4.2's backup step only
+  *starts* an `fdbbackup` job, and restoring one means `fdbrestore`
+  against a quiesced cluster. Refusing up front beats a rollback that
+  reports success without restoring anything.
+- Step 3 (restore the old unit/Compose config) is wired but inert: it
+  restores a preserved service definition if the run recorded one, and
+  nothing records one yet because cutover — the phase that would rewrite
+  it — doesn't exist. It reports as an explicit skip, not a silent pass.
+- For an external SQL store, step 2 replays the critical-table dump in
+  place. Unlike the filesystem path, the current contents are *not*
+  preserved first; the plan the command prints says so before it acts.
+
+`stalwart-migrate run` without `--dry-run` still refuses, but the reason
+has narrowed: what's missing now is §4.5 cutover itself, not the ability to
+undo it.
 
 ### 4.9 Dry run
 
@@ -399,13 +421,16 @@ stalwart-migrate run         --dry-run [--target-binary PATH] ...  # implemented
                               [--keep-artifacts]
                               (without --dry-run: refused today — see §4.8's status note)
 stalwart-migrate status      [run-id]                          # implemented
-stalwart-migrate rollback    <run-id>                          # not yet implemented (§4.8)
+stalwart-migrate rollback    <run-id> [--yes]                   # implemented — see §4.8
 stalwart-migrate confirm     <run-id>                          # not yet implemented
 stalwart-migrate report      <run-id>   [--json]                # not yet implemented
 ```
 
-`run` is the only command that mutates anything and it always starts with
-preflight. Once rollback exists, `confirm` will be a separate, explicit step
+`run` is the only command that mutates anything on a *successful* path, and
+it always starts with preflight. `rollback` mutates too, by design — it's
+the one command that stops a running mail server and overwrites a live data
+directory — so it prints the plan it resolved from the run's checkpoint and
+refuses to act without `--yes`. Once rollback exists, `confirm` will be a separate, explicit step
 so backups aren't pruned just because validation passed automatically — the
 operator gets a beat to actually use the migrated server before disk space
 is reclaimed. Default retention if never confirmed: configurable TTL, warns
@@ -416,7 +441,7 @@ run `stalwart-migrate <command> -h` for the actual current flag set.
 
 ```
 stalwart-migrator/
-  cmd/stalwart-migrate/     main.go, preflight.go, run.go, status.go — CLI entry + wiring
+  cmd/stalwart-migrate/     main.go, preflight.go, run.go, status.go, rollback.go — CLI entry + wiring
   internal/plan/            version-boundary → ordered phase list (§4.6)                 [done]
   internal/checkpoint/      run-id, state.json read/write, resume logic (§5)             [done]
   internal/preflight/       §4.1 checks                                                  [done]
@@ -437,7 +462,14 @@ its own package, pending a real cutover phase to generalize it against.
 
 `internal/stalwartapi` is deliberately the only thing that speaks JMAP/HTTP
 to Stalwart — every other package depends on it, not on `net/http` directly,
-so auth handling and retry/backoff live in one place.
+so auth handling and retry/backoff live in one place. `internal/service` is
+the same idea for the other external surface: it is the only thing that
+shells out to `systemctl` or `docker`, so the commands that can take mail
+delivery down sit in one auditable file rather than in each phase that
+happens to need them. Rollback needs it today and cutover will need exactly
+the same operations, which is why it's its own package rather than living
+inside `internal/rollback`. `preflight.DeploymentKind` is a type alias for
+`service.Kind`, so detection and control can't drift apart.
 
 ## 8. Open questions for the next pass
 
@@ -504,15 +536,31 @@ so auth handling and retry/backoff live in one place.
   mailbox snapshotting all work end-to-end, and dry-run's comparison is now
   the closest thing to §4.7's actual no-data-loss guarantee this tool has —
   the remaining major gap is `internal/rollback` and real cutover (below).
-- **No real cutover or rollback yet**: `internal/rollback` doesn't exist,
-  and neither does any systemd/Docker service control. `run` without
-  `--dry-run` refuses for exactly this reason. Building rollback first -
-  before wiring a real cutover - is deliberate: this tool should never be
-  able to commit to a change it can't undo.
-- **Dry-run's un-stopped backup snapshot** (§4.9 step 2): without service
-  control, a dry-run backs up a live, in-use store unless the operator stops
-  it manually first. Worth revisiting once service control exists, so
-  dry-run can offer to do this safely itself.
+- **Rollback: done. Real cutover: still missing.** `internal/rollback` and
+  `internal/service` are implemented and tested (§4.8), so `stalwart-migrate
+  rollback <run-id>` can now undo a run: it re-verifies the backup, stops the
+  service, moves the failed attempt aside without deleting it, restores the
+  data directory (re-verifying every restored file against the manifest) or
+  replays the SQL dump, reinstalls the preserved binary, restarts, and runs a
+  reduced validation suite against the *restored* instance rather than
+  assuming it worked. `run` without `--dry-run` still refuses, but now for
+  the narrower reason that §4.5 cutover itself isn't built - the thing that
+  would swap the binary, rewrite the unit, and switch the service over. Doing
+  rollback first was deliberate: this tool should never be able to commit to
+  a change it can't undo.
+- **`confirm` still has no implementation**, so nothing can set
+  `RollbackWindowClosed` - rollback honours the flag and refuses when it's
+  set, but only a hand-edited state.json can currently set it. Closing the
+  window is the point of no return for the backups this restores from, so it
+  should land together with the retention/TTL policy §6 describes, not
+  before it.
+- **Cutover must preserve the service definition it rewrites**, recording it
+  as a `service-unit` artifact; rollback's restore step already reads that
+  contract and reports an explicit skip until something writes one.
+- **Dry-run's un-stopped backup snapshot** (§4.9 step 2): a dry-run still
+  backs up a live, in-use store unless the operator stops it manually first.
+  `internal/service` now makes doing this properly possible - dry-run just
+  hasn't been wired to offer it yet.
 
 ## Sources
 

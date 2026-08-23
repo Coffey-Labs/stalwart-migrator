@@ -4,16 +4,21 @@ import (
 	"context"
 	"os"
 	"os/exec"
+
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
 )
 
 // DeploymentKind is how a Stalwart instance appears to be run, which
-// determines how cutover and rollback restart it.
-type DeploymentKind string
+// determines how cutover and rollback restart it. It's an alias for
+// service.Kind rather than a parallel type: detection here and control
+// there have to agree on the same vocabulary, and one definition can't
+// drift from itself.
+type DeploymentKind = service.Kind
 
 const (
-	DeploymentSystemd DeploymentKind = "systemd"
-	DeploymentDocker  DeploymentKind = "docker"
-	DeploymentUnknown DeploymentKind = "unknown"
+	DeploymentSystemd = service.Systemd
+	DeploymentDocker  = service.Docker
+	DeploymentUnknown = service.Unknown
 )
 
 var systemdUnitPaths = []string{

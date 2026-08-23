@@ -17,12 +17,10 @@ import (
 )
 
 // runRun implements `stalwart-migrate run`. Only --dry-run is available
-// today: a real cutover needs internal/rollback (so a failed migration can
-// actually be undone) and real systemd/Docker service control, neither of
-// which exist yet - see ARCHITECTURE.md §8. Committing to a real migration
-// without a working rollback would violate the one thing this whole tool
-// exists to guarantee, so `run` without --dry-run refuses rather than doing
-// it partway.
+// today: the cutover phase itself (§4.5) isn't built. internal/rollback and
+// internal/service now exist, so the missing piece is no longer "this can't
+// be undone" but "there's nothing here to undo" - see ARCHITECTURE.md §8.
+// `run` without --dry-run refuses rather than doing a migration partway.
 //
 // --dry-run runs preflight and a real backup (see the caveat printed below
 // about why backup still touches the live data directory), then - if the
@@ -70,8 +68,9 @@ func runRun(args []string) (err error) {
 
 	if !*dryRun {
 		return fmt.Errorf(
-			"real (non-dry-run) migrations aren't available yet: internal/rollback and real systemd/Docker service control " +
-				"aren't implemented, so this tool can't yet guarantee it can undo a failed cutover. Run with --dry-run to " +
+			"real (non-dry-run) migrations aren't available yet: the cutover phase - installing the new binary, rewriting the " +
+				"service definition, and starting the migrated instance for real (ARCHITECTURE.md §4.5) - isn't implemented. " +
+				"Rollback is, so a future cutover will be undoable; there just isn't one to undo yet. Run with --dry-run to " +
 				"validate the migration mechanics against a disposable sandbox copy of your data - nothing in production is touched",
 		)
 	}
@@ -136,9 +135,9 @@ func runRun(args []string) (err error) {
 	fmt.Printf("\nplan: %s\n", p.Reason)
 
 	fmt.Println("\n--- backup ---")
-	fmt.Println("(dry-run does not stop the live Stalwart service itself - no service control is implemented yet. " +
-		"For a guaranteed-consistent snapshot, stop stalwart before running this; otherwise the filesystem copy may " +
-		"reflect a live, in-use store. This is unrelated to whether production gets touched - it never does.)")
+	fmt.Println("(dry-run does not stop the live Stalwart service itself - internal/service can now do that, but dry-run " +
+		"isn't wired to offer it. For a guaranteed-consistent snapshot, stop stalwart before running this; otherwise the " +
+		"filesystem copy may reflect a live, in-use store. This is unrelated to whether production gets touched - it never does.)")
 
 	backupDir := filepath.Join(runWorkDir, "backup")
 	scriptDest := filepath.Join(runWorkDir, "migrate_v016.py")
