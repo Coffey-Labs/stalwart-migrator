@@ -1,0 +1,290 @@
+package preflight
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
+	"github.com/johnellis/stalwart-migrator/internal/stalwartapi"
+)
+
+// Options configures a Checker. Every field has a conservative default
+// applied by New except the ones that must name a real path on this host.
+type Options struct {
+	BinaryPath      string // installed stalwart binary, e.g. /usr/local/bin/stalwart
+	ConfigPath      string // its config file (TOML pre-0.16, JSON 0.16+)
+	DataDir         string // data directory to size/space-check
+	ContainerName   string // docker container name, if applicable
+	AdminURL        string // base URL for the JMAP reachability check; empty skips it
+	AdminUser       string
+	AdminPassword   string
+	TargetVersion   string // e.g. "0.16.14" or "latest"
+	MinFreeMultiple float64
+	HTTPClient      *http.Client
+}
+
+// Checker runs the preflight checks described in ARCHITECTURE.md §4.1.
+type Checker struct {
+	opts Options
+}
+
+func New(opts Options) *Checker {
+	if opts.MinFreeMultiple <= 0 {
+		opts.MinFreeMultiple = 2.0
+	}
+	return &Checker{opts: opts}
+}
+
+// Run executes every preflight check, checkpointing each one so a killed
+// and re-invoked run skips checks that already completed - see
+// checkpoint.Store.RunStep. It never aborts early on a single Fail: the
+// point of preflight is to surface every blocking issue in one pass rather
+// than fail-stop-fix-retry one at a time. Callers decide what to do with a
+// Report whose Blocking() is true. It only returns a non-nil error for a
+// genuine execution fault (e.g. the checkpoint store itself can't be
+// written to) - a check finding a real problem is reported via
+// Status: StatusFail in the Report, not a Go error.
+func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState) (Report, error) {
+	var report Report
+
+	// runCheck wraps fn as a checkpointed step and appends its result to
+	// report, whether fn actually ran or was skipped because a prior
+	// attempt already completed it - either way report ends up with the
+	// same entries, and the returned checkpoint.StepOutcome.Extra carries
+	// whatever machine-readable value a later check in this same Run needs.
+	runCheck := func(name string, fn func() (CheckResult, string)) (checkpoint.StepOutcome, error) {
+		outcome, err := store.RunStep(rs, checkpoint.PhasePreflight, name, func() (checkpoint.StepOutcome, error) {
+			res, extra := fn()
+			return checkpoint.StepOutcome{Verdict: string(res.Status), Detail: res.Detail, Extra: extra}, nil
+		})
+		if err != nil {
+			return checkpoint.StepOutcome{}, err
+		}
+		report.Results = append(report.Results, CheckResult{Name: name, Status: Status(outcome.Verdict), Detail: outcome.Detail})
+		return outcome, nil
+	}
+
+	versionOutcome, err := runCheck("version", func() (CheckResult, string) {
+		cur, err := DetectVersion(ctx, c.opts.BinaryPath)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		curV, _ := parseSemver(cur)
+		if curV.Compare(minSupportedSource) < 0 {
+			return CheckResult{
+				Status: StatusFail,
+				Detail: fmt.Sprintf("current version %s is older than the minimum supported %s - upgrade to 0.15.x first", cur, minSupportedSource),
+			}, cur
+		}
+		return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("current version %s", cur)}, cur
+	})
+	if err != nil {
+		return report, err
+	}
+
+	targetOutcome, err := runCheck("target-release", func() (CheckResult, string) {
+		rel, err := ResolveRelease(ctx, c.opts.HTTPClient, c.opts.TargetVersion)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		tag := strings.TrimPrefix(rel.TagName, "v")
+		detail := fmt.Sprintf("resolved target to %s (%d release assets)", rel.TagName, len(rel.Assets))
+		if asset := ChecksumAsset(rel); asset != nil {
+			detail += fmt.Sprintf(", checksum manifest available: %s", asset.Name)
+		} else {
+			detail += "; no published checksum manifest found - integrity relies on the one-time HTTPS download only"
+		}
+		return CheckResult{Status: StatusOK, Detail: detail}, tag
+	})
+	if err != nil {
+		return report, err
+	}
+
+	if _, err := runCheck("upgrade-direction", func() (CheckResult, string) {
+		curV, errCur := parseSemver(versionOutcome.Extra)
+		tgtV, errTgt := parseSemver(targetOutcome.Extra)
+		if errCur != nil || errTgt != nil {
+			return CheckResult{Status: StatusWarn, Detail: "could not compare current and target versions (one or both unresolved above)"}, ""
+		}
+		if curV.Compare(tgtV) >= 0 {
+			return CheckResult{
+				Status: StatusFail,
+				Detail: fmt.Sprintf("current version %s is already at or beyond target %s - nothing to migrate", curV, tgtV),
+			}, ""
+		}
+		if curV.Major == 0 && curV.Minor < 16 && (tgtV.Major > 0 || tgtV.Minor >= 16) {
+			return CheckResult{
+				Status: StatusOK,
+				Detail: fmt.Sprintf("%s -> %s crosses the 0.15/0.16 major boundary: full recovery-mode migration plan required (ARCHITECTURE.md §4.4)", curV, tgtV),
+			}, ""
+		}
+		return CheckResult{
+			Status: StatusOK,
+			Detail: fmt.Sprintf("%s -> %s is a same-boundary patch upgrade: fast-path plan applies (ARCHITECTURE.md §4.6)", curV, tgtV),
+		}, ""
+	}); err != nil {
+		return report, err
+	}
+
+	deploymentOutcome, err := runCheck("deployment-kind", func() (CheckResult, string) {
+		kind := DetectDeploymentKind(ctx, c.opts.ContainerName)
+		status := StatusOK
+		if kind == DeploymentUnknown {
+			status = StatusWarn
+		}
+		return CheckResult{Status: status, Detail: fmt.Sprintf("detected deployment kind: %s", kind)}, string(kind)
+	})
+	if err != nil {
+		return report, err
+	}
+
+	storeOutcome, err := runCheck("store-backend", func() (CheckResult, string) {
+		matches, err := DetectStoreBackends(c.opts.ConfigPath)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		if len(matches) == 0 {
+			return CheckResult{Status: StatusWarn, Detail: "no known store backend type found in config - confirm manually before proceeding"}, ""
+		}
+		names := make([]string, len(matches))
+		backends := make([]string, len(matches))
+		for i, m := range matches {
+			names[i] = fmt.Sprintf("%s (%s)", m.Backend, m.Path)
+			backends[i] = m.Backend
+		}
+		return CheckResult{Status: StatusOK, Detail: "found: " + strings.Join(names, ", ")}, strings.Join(backends, ",")
+	})
+	if err != nil {
+		return report, err
+	}
+
+	if _, err := runCheck("cluster-config", func() (CheckResult, string) {
+		clustered, err := LooksClustered(c.opts.ConfigPath)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		if clustered {
+			return CheckResult{
+				Status: StatusWarn,
+				Detail: "config mentions clustering - confirm every peer node is stopped before this run proceeds; the tool does not verify this for you",
+			}, ""
+		}
+		return CheckResult{Status: StatusOK, Detail: "no cluster configuration detected"}, ""
+	}); err != nil {
+		return report, err
+	}
+
+	if _, err := runCheck("disk-space", func() (CheckResult, string) {
+		size, err := DirSize(c.opts.DataDir)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		free, err := FreeBytes(c.opts.DataDir)
+		if err != nil {
+			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+		}
+		required := uint64(float64(size) * c.opts.MinFreeMultiple)
+		detail := fmt.Sprintf("data dir %s is %s, %s free, need >= %s (%.1fx, for the fs-snapshot backup)",
+			c.opts.DataDir, humanBytes(uint64(size)), humanBytes(free), humanBytes(required), c.opts.MinFreeMultiple)
+		if free < required {
+			return CheckResult{Status: StatusFail, Detail: detail}, ""
+		}
+		return CheckResult{Status: StatusOK, Detail: detail}, ""
+	}); err != nil {
+		return report, err
+	}
+
+	if c.opts.AdminURL != "" {
+		if _, err := runCheck("admin-reachable", func() (CheckResult, string) {
+			client := &stalwartapi.Client{
+				BaseURL:    c.opts.AdminURL,
+				Username:   c.opts.AdminUser,
+				Password:   c.opts.AdminPassword,
+				HTTPClient: c.opts.HTTPClient,
+			}
+			if err := client.Ping(ctx); err != nil {
+				return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
+			}
+			return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("JMAP session reachable at %s with the given credentials", c.opts.AdminURL)}, ""
+		}); err != nil {
+			return report, err
+		}
+
+		if _, err := runCheck("account-snapshot", func() (CheckResult, string) {
+			client := &stalwartapi.Client{
+				BaseURL:    c.opts.AdminURL,
+				Username:   c.opts.AdminUser,
+				Password:   c.opts.AdminPassword,
+				HTTPClient: c.opts.HTTPClient,
+			}
+			snap, err := client.AccountSnapshot(ctx)
+			if err != nil {
+				return CheckResult{
+					Status: StatusWarn,
+					Detail: fmt.Sprintf("could not capture the account/domain snapshot: %v - the post-migration directory-integrity check won't have anything to compare against", err),
+				}, ""
+			}
+			mailboxCounts := make(map[string][]checkpoint.MailboxCount, len(snap.MailboxCounts))
+			for account, counts := range snap.MailboxCounts {
+				converted := make([]checkpoint.MailboxCount, len(counts))
+				for i, mc := range counts {
+					converted[i] = checkpoint.MailboxCount{Mailbox: mc.Mailbox, Messages: mc.Messages}
+				}
+				mailboxCounts[account] = converted
+			}
+			rs.PreflightSnapshot = &checkpoint.PreflightSnapshot{
+				TakenAt:       time.Now().UTC(),
+				AccountCount:  snap.AccountCount,
+				Domains:       snap.Domains,
+				MailboxCounts: mailboxCounts,
+			}
+			detail := fmt.Sprintf("captured snapshot: %d account(s) across %d domain(s), mailbox counts for %d account(s)",
+				snap.AccountCount, len(snap.Domains), len(mailboxCounts))
+			status := StatusOK
+			if len(snap.MailboxErrors) > 0 {
+				status = StatusWarn
+				accounts := make([]string, 0, len(snap.MailboxErrors))
+				for account := range snap.MailboxErrors {
+					accounts = append(accounts, account)
+				}
+				sort.Strings(accounts)
+				for i, account := range accounts {
+					if i >= 3 {
+						detail += fmt.Sprintf(" (and %d more)", len(accounts)-3)
+						break
+					}
+					detail += fmt.Sprintf("; mailbox count failed for %s: %s", account, snap.MailboxErrors[account])
+				}
+			}
+			return CheckResult{Status: status, Detail: detail}, ""
+		}); err != nil {
+			return report, err
+		}
+	} else {
+		report.Results = append(report.Results, CheckResult{
+			Name:   "admin-reachable",
+			Status: StatusWarn,
+			Detail: "no --admin-url configured - skipped; the account/mailbox snapshot validate needs later can't be captured without it",
+		})
+	}
+
+	rs.Topology = checkpoint.Topology{
+		DeploymentKind: deploymentOutcome.Extra,
+		StoreBackend:   storeOutcome.Extra,
+	}
+	if versionOutcome.Extra != "" {
+		rs.SourceVersion = versionOutcome.Extra
+	}
+	if targetOutcome.Extra != "" {
+		rs.TargetVersion = targetOutcome.Extra
+	}
+	if err := store.Save(rs); err != nil {
+		return report, fmt.Errorf("preflight: persist topology: %w", err)
+	}
+
+	return report, nil
+}

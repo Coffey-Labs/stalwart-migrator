@@ -1,0 +1,26 @@
+# Binaries
+/bin/
+/dist/
+stalwart-migrate
+*.exe
+
+# Test / coverage
+*.out
+*.test
+
+# Local state & logs
+*.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Credentials / local config
+.env
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
