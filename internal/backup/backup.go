@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 )
 
 // Options configures a full backup pass. Which fields matter depends on

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
-	"github.com/johnellis/stalwart-migrator/internal/stalwartapi"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
 )
 
 // jmapEnvelope mirrors the wire shape stalwartapi.Client.call() parses.

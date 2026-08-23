@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
-	"github.com/johnellis/stalwart-migrator/internal/recovery"
-	"github.com/johnellis/stalwart-migrator/internal/stalwartapi"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/recovery"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
 )
 
 // BootCheckOptions configures a normal (non-recovery-mode) boot of the

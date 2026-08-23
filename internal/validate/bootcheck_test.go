@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 )
 
 func freePort(t *testing.T) int {

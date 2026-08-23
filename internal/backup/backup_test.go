@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 )
 
 func TestBackupRunEndToEndAndResume(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/johnellis/stalwart-migrator/internal/checkpoint"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 )
 
 // Options configures one full recovery-mode migration cycle: starting the
