@@ -154,3 +154,24 @@ checksum-verified, root-owned data directory that Stalwart, running as its
 own user, could not open, and it would have reported success. A filesystem
 snapshot has no such failure mode, because it never lost the metadata to
 begin with. ARCHITECTURE.md §4.8 records the full reasoning.
+
+## License
+
+Copyright (C) 2026 LINUXexpert-org
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full text is in [`LICENSE`](LICENSE). No third-party code is vendored —
+this tool is standard library only, and the `migrate_v016.py` it downloads
+at runtime is Stalwart's own script, fetched rather than redistributed.
