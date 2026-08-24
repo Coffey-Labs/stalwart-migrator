@@ -244,9 +244,16 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 				AccountCount:  snap.AccountCount,
 				Domains:       snap.Domains,
 				MailboxCounts: mailboxCounts,
+				UsedQuota:     snap.UsedQuota,
 			}
-			detail := fmt.Sprintf("captured snapshot: %d account(s) across %d domain(s), mailbox counts for %d account(s)",
-				snap.AccountCount, len(snap.Domains), len(mailboxCounts))
+			detail := fmt.Sprintf("captured snapshot: %d account(s) across %d domain(s), used-quota for %d account(s), mailbox counts for %d account(s)",
+				snap.AccountCount, len(snap.Domains), len(snap.UsedQuota), len(mailboxCounts))
+			if len(mailboxCounts) == 0 && len(snap.UsedQuota) > 0 {
+				// Expected against a 0.15.x source: it exposes no
+				// per-mailbox counts, so used-quota is what the
+				// post-migration comparison will have to work from.
+				detail += " (this source exposes no per-mailbox counts, so the post-migration check compares accounts, domains and used-quota)"
+			}
 			status := StatusOK
 			if len(snap.MailboxErrors) > 0 {
 				status = StatusWarn

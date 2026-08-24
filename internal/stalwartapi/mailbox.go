@@ -20,6 +20,10 @@ import (
 type jmapSession struct {
 	APIURL          string            `json:"apiUrl"`
 	PrimaryAccounts map[string]string `json:"primaryAccounts"`
+	// Capabilities is what the instance says it supports. Its contents
+	// decide which management API this client speaks - see
+	// stalwartManagementCapability.
+	Capabilities map[string]json.RawMessage `json:"capabilities"`
 }
 
 const jmapMailCapability = "urn:ietf:params:jmap:mail"

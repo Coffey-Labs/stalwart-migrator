@@ -60,7 +60,10 @@ func runFakeStalwartServer() {
 				})
 				return
 			}
-			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"apiUrl":       "http://127.0.0.1:" + port + "/api",
+				"capabilities": map[string]any{"urn:ietf:params:jmap:core": map[string]any{}, "urn:stalwart:jmap": map[string]any{}},
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api":
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)

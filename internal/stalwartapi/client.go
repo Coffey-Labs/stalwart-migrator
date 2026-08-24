@@ -63,6 +63,12 @@ type Snapshot struct {
 	AccountCount  int
 	Domains       []string
 	MailboxCounts map[string][]MailboxCount // account email -> its mailboxes
+	// UsedQuota is each account's used storage in bytes. Unlike
+	// MailboxCounts it is available from both API generations - 0.15.x's
+	// REST principal list and 0.16's x:Account both report it - which
+	// makes it the only per-account content measure that can be compared
+	// across the 0.15/0.16 boundary. See principal.go.
+	UsedQuota map[string]int64
 	// MailboxErrors records, per account email, why that account's mailbox
 	// counts couldn't be captured (e.g. impersonation not permitted for
 	// that account). A non-empty entry here means MailboxCounts has no

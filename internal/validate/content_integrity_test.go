@@ -29,6 +29,15 @@ func fakeManagementServer(t *testing.T, accounts []map[string]any, mailboxesByEm
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
 			user, _, _ := r.BasicAuth()
+			if !strings.Contains(user, "%") {
+				// This instance is a migrated 0.16 one, which is what the
+				// urn:stalwart:jmap capability says.
+				json.NewEncoder(w).Encode(map[string]any{
+					"apiUrl":       apiURL,
+					"capabilities": map[string]any{"urn:ietf:params:jmap:core": map[string]any{}, "urn:stalwart:jmap": map[string]any{}},
+				})
+				return
+			}
 			target := strings.SplitN(user, "%", 2)[0]
 			if _, ok := mailboxesByEmail[target]; !ok {
 				w.WriteHeader(http.StatusForbidden)
@@ -164,5 +173,72 @@ func TestCompareContentIntegrityMultipleMailboxesPerAccount(t *testing.T) {
 	m := result.MessageCountMismatches[0]
 	if m.Mailbox != "Archive" || m.Before != 199 || m.After != 200 {
 		t.Errorf("mismatch = %+v, want Archive 199->200", m)
+	}
+}
+
+// The bug this guards against was found by running preflight against a real
+// Stalwart 0.15.5: it reports no per-mailbox counts, so the "before"
+// snapshot has none, and the comparison used to iterate that empty map,
+// check nothing, and report "all message counts match" - the strongest
+// claim this tool makes, made vacuously.
+func TestCompareContentIntegrityDoesNotClaimCountsMatchWhenSourceHadNone(t *testing.T) {
+	srv := fakeManagementServer(t,
+		[]map[string]any{{"id": "a1", "name": "alice@smoke.test", "domainId": "smoke.test"}},
+		map[string][]map[string]any{"alice@smoke.test": {{"name": "Inbox", "totalEmails": 3}}},
+	)
+	defer srv.Close()
+
+	// A 0.15.x-shaped snapshot: accounts and used-quota, no mailbox counts.
+	before := &checkpoint.PreflightSnapshot{
+		AccountCount: 1,
+		Domains:      []string{"smoke.test"},
+		UsedQuota:    map[string]int64{"alice@smoke.test": 9207},
+	}
+	client := &stalwartapi.Client{BaseURL: srv.URL, Username: "admin", Password: "x"}
+	result, err := compareContentIntegrity(context.Background(), client, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageCountsCompared {
+		t.Error("MessageCountsCompared = true, but the source snapshot had no counts")
+	}
+	if result.AccountsChecked != 1 {
+		t.Errorf("AccountsChecked = %d, want 1 - the account set must still be verified", result.AccountsChecked)
+	}
+	if strings.Contains(result.String(), "all message counts match") {
+		t.Errorf("report claims counts match when none were compared:\n%s", result)
+	}
+	if !strings.Contains(result.String(), "MESSAGE COUNTS NOT COMPARED") {
+		t.Errorf("report must say plainly that no-data-loss was not verified:\n%s", result)
+	}
+}
+
+// Presence checking still has to work on that path, or it would be no
+// better than the vacuous pass it replaced.
+func TestCompareContentIntegrityDetectsLostAccountWithoutCounts(t *testing.T) {
+	srv := fakeManagementServer(t,
+		[]map[string]any{{"id": "a1", "name": "alice@smoke.test", "domainId": "smoke.test"}},
+		map[string][]map[string]any{"alice@smoke.test": {{"name": "Inbox", "totalEmails": 3}}},
+	)
+	defer srv.Close()
+
+	before := &checkpoint.PreflightSnapshot{
+		AccountCount: 2,
+		Domains:      []string{"smoke.test", "gone.example"},
+		UsedQuota:    map[string]int64{"alice@smoke.test": 9207, "bob@smoke.test": 5380},
+	}
+	client := &stalwartapi.Client{BaseURL: srv.URL, Username: "admin", Password: "x"}
+	result, err := compareContentIntegrity(context.Background(), client, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OK() {
+		t.Fatalf("want a failing result when an account and a domain vanished:\n%s", result)
+	}
+	if len(result.MissingAccounts) != 1 || result.MissingAccounts[0] != "bob@smoke.test" {
+		t.Errorf("MissingAccounts = %v, want [bob@smoke.test]", result.MissingAccounts)
+	}
+	if len(result.MissingDomains) != 1 || result.MissingDomains[0] != "gone.example" {
+		t.Errorf("MissingDomains = %v, want [gone.example]", result.MissingDomains)
 	}
 }

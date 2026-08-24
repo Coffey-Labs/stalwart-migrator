@@ -104,6 +104,10 @@ type account struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	DomainID string `json:"domainId"`
+	// UsedDiskQuota is 0.16's name for what 0.15's REST API calls
+	// usedQuota - the same per-account byte count, which is what makes a
+	// cross-boundary content comparison possible at all.
+	UsedDiskQuota int64 `json:"usedDiskQuota"`
 }
 
 // AccountSnapshot enumerates every account on the instance via Stalwart's
@@ -124,6 +128,22 @@ type account struct {
 // exactly what's missing rather than silently treating an unreachable
 // account's mailboxes as having zero messages.
 func (c *Client) AccountSnapshot(ctx context.Context) (*Snapshot, error) {
+	isJMAP, err := c.hasJMAPManagement(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("stalwartapi: discover which management API this instance speaks: %w", err)
+	}
+	if !isJMAP {
+		// No urn:stalwart:jmap: this is a 0.15.x instance, whose
+		// management API is REST. Confirmed against a live 0.15.5 server -
+		// see principal.go.
+		return c.principalSnapshotREST(ctx)
+	}
+	return c.accountSnapshotJMAP(ctx)
+}
+
+// accountSnapshotJMAP is the 0.16+ path, via Stalwart's JMAP management
+// objects.
+func (c *Client) accountSnapshotJMAP(ctx context.Context) (*Snapshot, error) {
 	ids, err := c.AccountIDs(ctx)
 	if err != nil {
 		return nil, err
@@ -133,7 +153,7 @@ func (c *Client) AccountSnapshot(ctx context.Context) (*Snapshot, error) {
 	}
 
 	getResp, err := c.call(ctx, managementCapabilities, []any{
-		[]any{"x:Account/get", map[string]any{"ids": ids, "properties": []string{"id", "name", "domainId"}}, "g"},
+		[]any{"x:Account/get", map[string]any{"ids": ids, "properties": []string{"id", "name", "domainId", "usedDiskQuota"}}, "g"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("stalwartapi: Account/get: %w", err)
@@ -169,11 +189,19 @@ func (c *Client) AccountSnapshot(ctx context.Context) (*Snapshot, error) {
 	}
 	sort.Strings(domains)
 
+	usedQuota := make(map[string]int64, len(accounts))
+	for _, a := range accounts {
+		if a.Name != "" {
+			usedQuota[a.Name] = a.UsedDiskQuota
+		}
+	}
+
 	return &Snapshot{
 		AccountCount:  len(accounts),
 		Domains:       domains,
 		MailboxCounts: mailboxCounts,
 		MailboxErrors: mailboxErrors,
+		UsedQuota:     usedQuota,
 	}, nil
 }
 

@@ -232,7 +232,12 @@ func TestCheckerRunCapturesAccountSnapshotWhenAdminURLSet(t *testing.T) {
 				})
 				return
 			}
-			w.WriteHeader(http.StatusOK)
+			// A 0.16-era instance: the urn:stalwart:jmap capability is what
+			// says its management API is the JMAP one.
+			json.NewEncoder(w).Encode(map[string]any{
+				"apiUrl":       apiURL,
+				"capabilities": map[string]any{"urn:ietf:params:jmap:core": map[string]any{}, "urn:stalwart:jmap": map[string]any{}},
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api":
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)

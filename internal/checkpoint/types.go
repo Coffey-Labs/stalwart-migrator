@@ -74,13 +74,19 @@ type MailboxCount struct {
 // which the validate phase later compares against the migrated instance.
 // See ARCHITECTURE.md §4.1 and §4.7.
 type PreflightSnapshot struct {
-	TakenAt          time.Time                 `json:"taken_at"`
-	AccountCount     int                       `json:"account_count"`
-	Domains          []string                  `json:"domains,omitempty"`
-	MailboxCounts    map[string][]MailboxCount `json:"mailbox_counts,omitempty"` // account -> mailboxes
-	DKIMFingerprints map[string]string         `json:"dkim_fingerprints,omitempty"`
-	TLSFingerprints  []string                  `json:"tls_fingerprints,omitempty"`
-	ListenerPorts    []int                     `json:"listener_ports,omitempty"`
+	TakenAt       time.Time                 `json:"taken_at"`
+	AccountCount  int                       `json:"account_count"`
+	Domains       []string                  `json:"domains,omitempty"`
+	MailboxCounts map[string][]MailboxCount `json:"mailbox_counts,omitempty"` // account -> mailboxes
+	// UsedQuota is each account's used storage in bytes. It is the only
+	// per-account content measure available on both sides of the 0.15/0.16
+	// boundary - 0.15.x exposes no per-mailbox message counts at all - so
+	// it is what the post-migration comparison can actually assert on a
+	// boundary migration. See stalwartapi/principal.go.
+	UsedQuota        map[string]int64  `json:"used_quota,omitempty"`
+	DKIMFingerprints map[string]string `json:"dkim_fingerprints,omitempty"`
+	TLSFingerprints  []string          `json:"tls_fingerprints,omitempty"`
+	ListenerPorts    []int             `json:"listener_ports,omitempty"`
 }
 
 // Topology records how this Stalwart instance is deployed, as detected

@@ -12,6 +12,21 @@ import (
 	"testing"
 )
 
+// serveJMAPSession answers session discovery for a server standing in for
+// a 0.16+ instance: what marks it as one is the urn:stalwart:jmap
+// capability, which is exactly what AccountSnapshot dispatches on. Returns
+// true if it handled the request.
+func serveJMAPSession(w http.ResponseWriter, r *http.Request, apiURL string) bool {
+	if r.Method != http.MethodGet || r.URL.Path != "/.well-known/jmap" {
+		return false
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"apiUrl":       apiURL,
+		"capabilities": map[string]any{"urn:ietf:params:jmap:core": map[string]any{}, "urn:stalwart:jmap": map[string]any{}},
+	})
+	return true
+}
+
 // jmapEnvelope mirrors the wire shape this package's call() parses: a
 // top-level {"methodResponses": [...]} object where each entry is a
 // [name, args, callId] triple (RFC 8620 §3.2).
@@ -35,6 +50,12 @@ func accountManagementAndMailboxServer(t *testing.T, mailboxesFor map[string][]m
 
 		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
 			user, _, _ := r.BasicAuth()
+			if !strings.Contains(user, "%") {
+				// The client's own session request, used to decide which
+				// management API this instance speaks.
+				serveJMAPSession(w, r, apiURL)
+				return
+			}
 			target := strings.SplitN(user, "%", 2)[0]
 			if _, ok := mailboxesFor[target]; !ok {
 				w.WriteHeader(http.StatusForbidden)
@@ -140,6 +161,9 @@ func TestAccountSnapshotRecordsPerAccountMailboxFailureWithoutFailingOverall(t *
 
 func TestAccountSnapshotEmptyInstance(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveJMAPSession(w, r, "/api") {
+			return
+		}
 		json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
 			[]any{"x:Account/query", map[string]any{"ids": []string{}}, "q"},
 		}})
@@ -158,6 +182,9 @@ func TestAccountSnapshotEmptyInstance(t *testing.T) {
 
 func TestAccountSnapshotPropagatesJMAPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveJMAPSession(w, r, "/api") {
+			return
+		}
 		json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
 			[]any{"error", map[string]any{"type": "forbidden"}, "q"},
 		}})
@@ -190,6 +217,9 @@ func TestAccountSnapshotSendsBasicAuth(t *testing.T) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != "admin" || pass != "hunter2" {
 			t.Errorf("BasicAuth = (%s, %s, %v), want (admin, hunter2, true)", user, pass, ok)
+		}
+		if serveJMAPSession(w, r, "/api") {
+			return
 		}
 		json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
 			[]any{"x:Account/query", map[string]any{"ids": []string{}}, "q"},
