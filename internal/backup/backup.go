@@ -184,10 +184,19 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		}
 
 	default:
-		report.Results = append(report.Results, CheckResult{
-			Name: "backend-backup", Status: StatusSkipped,
-			Detail: fmt.Sprintf("no known store backend recorded for this run (topology.store_backend=%q) - preflight must run first, or the backend wasn't recognized; no filesystem/DB backup was taken", rs.Topology.StoreBackend),
-		})
+		// Not a skip. An unrecognized backend used to be reported as
+		// "skipped" and the run continued with no filesystem or database
+		// backup at all - the one artifact this phase exists to produce,
+		// quietly absent. It is reachable in practice: preflight failed to
+		// detect the backend of a real production instance because its
+		// config declares it with flat dotted keys, and the run would have
+		// proceeded backup-less.
+		err := fmt.Errorf("backup: no recognized store backend for this run (topology.store_backend=%q) - "+
+			"refusing to continue without a filesystem or database backup. Run preflight first; if it also can't "+
+			"identify the backend, the config layout isn't one this tool recognizes and the backup must be taken by hand",
+			rs.Topology.StoreBackend)
+		report.Results = append(report.Results, CheckResult{Name: "backend-backup", Status: StatusFail, Detail: err.Error()})
+		return report, err
 	}
 
 	if _, err := step("settings-dump", func() (checkpoint.StepOutcome, error) {

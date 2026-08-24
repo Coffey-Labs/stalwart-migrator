@@ -67,8 +67,25 @@ func scanTOMLBackends(data []byte) ([]BackendMatch, error) {
 		}
 		if m := tomlKVRe.FindStringSubmatch(line); m != nil {
 			key, value := m[1], strings.ToLower(m[2])
-			if key == "type" && knownBackends[value] {
+			if !knownBackends[value] {
+				continue
+			}
+			// Two spellings, both real. A config written with sections
+			// declares `type = "rocksdb"` under `[store.rocksdb]`; one
+			// written flat declares `store.rocksdb.type = "rocksdb"` with
+			// no sections at all. A real production instance uses the
+			// second form exclusively - checking only for a bare `type`
+			// key found nothing there, and an undetected backend makes the
+			// backup phase skip the filesystem snapshot entirely.
+			switch {
+			case key == "type":
 				matches = append(matches, BackendMatch{Path: section, Backend: value})
+			case strings.HasSuffix(key, ".type"):
+				path := strings.TrimSuffix(key, ".type")
+				if section != "" {
+					path = section + "." + path
+				}
+				matches = append(matches, BackendMatch{Path: path, Backend: value})
 			}
 		}
 	}

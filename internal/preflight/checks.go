@@ -166,15 +166,21 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 	}
 
 	if _, err := runCheck("cluster-config", func() (CheckResult, string) {
-		clustered, err := LooksClustered(c.opts.ConfigPath)
+		mentions, err := ClusterMentions(c.opts.ConfigPath)
 		if err != nil {
 			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
 		}
-		if clustered {
-			return CheckResult{
-				Status: StatusWarn,
-				Detail: "config mentions clustering - confirm every peer node is stopped before this run proceeds; the tool does not verify this for you",
-			}, ""
+		if len(mentions) > 0 {
+			shown := mentions
+			if len(shown) > 5 {
+				shown = shown[:5]
+			}
+			detail := fmt.Sprintf("config mentions clustering at %s", strings.Join(shown, ", "))
+			if len(mentions) > len(shown) {
+				detail += fmt.Sprintf(" (and %d more)", len(mentions)-len(shown))
+			}
+			detail += " - confirm every peer node is stopped before this run proceeds; the tool does not verify this for you"
+			return CheckResult{Status: StatusWarn, Detail: detail}, ""
 		}
 		return CheckResult{Status: StatusOK, Detail: "no cluster configuration detected"}, ""
 	}); err != nil {

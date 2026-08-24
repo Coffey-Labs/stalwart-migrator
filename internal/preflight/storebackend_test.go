@@ -87,3 +87,53 @@ func TestDetectStoreBackendsNoMatch(t *testing.T) {
 		t.Errorf("got %d matches, want 0: %+v", len(matches), matches)
 	}
 }
+
+// A real production config declares its backend with flat dotted keys and
+// has no section headers at all. Checking only for a bare `type` key found
+// nothing there, and an undetected backend makes the backup phase skip the
+// filesystem snapshot - the artifact it exists to produce.
+func TestDetectStoreBackendsHandlesFlatDottedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	// Shape taken from a real 0.15.5 instance: no [sections] anywhere.
+	body := `storage.blob = "rocksdb"
+storage.data = "rocksdb"
+storage.directory = "internal"
+store.rocksdb.compression = "lz4"
+store.rocksdb.path = "/opt/stalwart/data"
+store.rocksdb.type = "rocksdb"
+directory.internal.type = "internal"
+`
+	if err := os.WriteFile(path, []byte(body), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := DetectStoreBackends(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("found %d backend(s), want 1: %+v", len(matches), matches)
+	}
+	if matches[0].Backend != "rocksdb" {
+		t.Errorf("backend = %q, want rocksdb", matches[0].Backend)
+	}
+	if matches[0].Path != "store.rocksdb" {
+		t.Errorf("path = %q, want store.rocksdb", matches[0].Path)
+	}
+}
+
+// The sectioned form must keep working; both spellings are real.
+func TestDetectStoreBackendsStillHandlesSections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[store.rocksdb]\ntype = \"rocksdb\"\npath = \"/var/lib/stalwart\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := DetectStoreBackends(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0].Backend != "rocksdb" || matches[0].Path != "store.rocksdb" {
+		t.Errorf("matches = %+v, want one rocksdb at store.rocksdb", matches)
+	}
+}
