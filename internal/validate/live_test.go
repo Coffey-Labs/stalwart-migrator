@@ -190,8 +190,76 @@ func fakeInstance(t *testing.T, domains []string, accounts map[string]float64) *
 	for name, quota := range accounts {
 		items = append(items, map[string]any{"type": "individual", "name": name, "usedQuota": quota})
 	}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Honour ?types= the way the real REST API does: asking for
+		// individuals must not hand back domains, or every count is wrong.
+		want := r.URL.Query().Get("types")
+		out := items
+		if want != "" {
+			out = nil
+			for _, it := range items {
+				if it["type"] == want {
+					out = append(out, it)
+				}
+			}
+		}
 		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": items, "total": len(items)}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": out, "total": len(out)}})
 	}))
+}
+
+// Enumeration is permission-scoped. An account that authenticates but holds
+// no management role is shown only what it may see, and a v0.16 migration
+// does not always carry an admin role across - so the account that read the
+// "before" side may have less reach afterwards. Observed on a clone of
+// production: every account survived, SMTP confirmed it, and the comparison
+// still called one lost because the reader could no longer see it.
+func TestRunLiveWillNotCallItLossWhenItCouldNotLook(t *testing.T) {
+	// The migrated instance shows only the reader's own account.
+	srv := fakeInstance(t, []string{"example.org"}, map[string]float64{"ann@example.org": 10})
+	defer srv.Close()
+
+	store, rs := newRun(t)
+	report, err := RunLive(context.Background(), store, rs, LiveOptions{
+		AdminURL: srv.URL, AdminUser: "ann@example.org", AdminPassword: "pw", HTTPClient: srv.Client(),
+		Before: &checkpoint.PreflightSnapshot{
+			Domains:   []string{"example.org"},
+			UsedQuota: map[string]int64{"ann@example.org": 1, "bob@example.org": 2, "postmaster@example.org": 3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunLive: %v", err)
+	}
+	// It still fails: an unverified migration is not a verified one. What it
+	// must not do is call it data loss, which is a different claim.
+	if !report.Blocking() {
+		t.Fatal("an unverifiable result must still stop the run")
+	}
+	detail := report.Results[0].Detail
+	for _, want := range []string{"COULD NOT VERIFY", "not the same as data loss", "permission-scoped", "1 of 3"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail should contain %q, got %q", want, detail)
+		}
+	}
+}
+
+// The other side of it: when the instance shows everything and an account is
+// genuinely absent, that is still a failure.
+func TestRunLiveStillFailsWhenTheInstanceShowedEverything(t *testing.T) {
+	srv := fakeInstance(t, []string{"example.org"}, map[string]float64{
+		"ann@example.org": 10, "carol@example.org": 20, "dave@example.org": 30,
+	})
+	defer srv.Close()
+
+	store, rs := newRun(t)
+	report, _ := RunLive(context.Background(), store, rs, LiveOptions{
+		AdminURL: srv.URL, AdminUser: "ann@example.org", AdminPassword: "pw", HTTPClient: srv.Client(),
+		Before: &checkpoint.PreflightSnapshot{
+			Domains:   []string{"example.org"},
+			UsedQuota: map[string]int64{"ann@example.org": 1, "bob@example.org": 2},
+		},
+	})
+	if !report.Blocking() {
+		t.Fatalf("a genuine loss must still block, got: %s", report.String())
+	}
 }

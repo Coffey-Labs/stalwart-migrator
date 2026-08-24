@@ -41,6 +41,11 @@ type ContentIntegrityResult struct {
 	MessageCountMismatches []MailboxDelta // present both before and after, but with a different message count
 	MissingDomains         []string       // present before, absent after
 	MessageCountsCompared  bool           // false when the source version could not report counts
+	// AccountsVisibleAfter is how many accounts the migrated instance was
+	// willing to show whoever asked. An account without management
+	// permission is shown far fewer than exist - so a short list is a
+	// statement about the reader, not about the data.
+	AccountsVisibleAfter int
 }
 
 // OK reports whether everything that must match did: no account and no mail
@@ -62,6 +67,20 @@ func (r ContentIntegrityResult) OK() bool {
 // listed after it.
 func (r ContentIntegrityResult) DomainsOK() bool {
 	return len(r.MissingDomains) == 0
+}
+
+// Inconclusive reports that the migrated instance showed fewer accounts than
+// existed before, which makes any "missing" finding unsafe to believe.
+//
+// Enumeration is permission-scoped: an account that authenticates but holds
+// no management role is shown only what it may see, and a v0.16 migration
+// does not always carry an admin role across - so the account that read the
+// "before" side may not have the same reach afterwards. Observed on a clone
+// of production: every account survived, and the comparison called one of
+// them lost because the reader could no longer see it. Reporting data loss
+// on that evidence is worse than reporting nothing.
+func (r ContentIntegrityResult) Inconclusive() bool {
+	return len(r.MissingAccounts) > 0 && r.AccountsVisibleAfter < r.AccountsChecked
 }
 
 func (r ContentIntegrityResult) String() string {
@@ -139,6 +158,8 @@ func compareContentIntegrity(ctx context.Context, client *stalwartapi.Client, be
 	for a := range after.MailboxErrors {
 		afterAccounts[a] = true
 	}
+
+	result.AccountsVisibleAfter = len(afterAccounts)
 
 	for _, d := range before.Domains {
 		if !containsDomain(after.Domains, d) {

@@ -72,6 +72,18 @@ func RunLive(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunSta
 			return checkpoint.StepOutcome{}, err
 		}
 		switch {
+		case r.Inconclusive():
+			// Fewer accounts came back than existed, so "missing" cannot be
+			// told apart from "not permitted to see". Still a failure - an
+			// unverified migration is not a verified one - but it must not
+			// be reported as data loss, which is a different claim and one
+			// this evidence does not support.
+			return checkpoint.StepOutcome{Verdict: string(StatusFail), Detail: fmt.Sprintf(
+				"COULD NOT VERIFY (not the same as data loss): the migrated instance showed %d of %d account(s) to %s. "+
+					"Either those accounts are gone, or this account cannot see them - enumeration is permission-scoped, and a "+
+					"migration does not always carry an admin role across. Re-check with an account that holds admin on the "+
+					"migrated instance before concluding either. Findings: %s",
+				r.AccountsVisibleAfter, r.AccountsChecked, opts.AdminUser, r.String())}, nil
 		case !r.OK():
 			// Recorded as a completed step with a failing verdict rather
 			// than an error: the comparison ran, and its answer is the
