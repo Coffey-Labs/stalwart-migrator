@@ -50,6 +50,10 @@ func runFakeStalwartServer() {
 		os.Exit(1)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap":
 			user, _, _ := r.BasicAuth()

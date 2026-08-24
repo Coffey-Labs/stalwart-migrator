@@ -51,15 +51,22 @@ const restPrincipalPageSize = 100
 // call.
 const stalwartManagementCapability = "urn:stalwart:jmap"
 
-// hasJMAPManagement reports whether this instance speaks the 0.16+ JMAP
-// management API, by reading the capability list from its session
-// document. It deliberately does its own request rather than reusing
-// fetchSession: that helper also requires an apiUrl and a mail account,
-// which are needed for impersonated mailbox reads but have nothing to do
-// with which management API to use - failing dispatch over a missing
-// apiUrl would misroute an instance that is perfectly readable.
-func (c *Client) hasJMAPManagement(ctx context.Context) (bool, error) {
-	endpoint := strings.TrimRight(c.BaseURL, "/") + "/.well-known/jmap"
+// hasRESTManagement reports whether this instance serves the v0.15.x REST
+// management API, by asking it for a single principal.
+//
+// This replaced a capability check, which cannot work: *neither* version
+// advertises urn:stalwart:jmap. A real 0.15.5 doesn't, and a fully
+// migrated, fully configured 0.16.14 doesn't either - verified against
+// both. Dispatching on the capability sent 0.16 instances down the 0.15
+// REST path, where every call 404s.
+//
+// So the client asks what the instance actually serves instead. 0.15.x
+// answers GET /api/principal with a principal list; 0.16.14 returns 404
+// for that path and serves JMAP management objects at the endpoint its
+// session document advertises. A cheap probe is less elegant than a
+// declared capability and has the considerable advantage of being true.
+func (c *Client) hasRESTManagement(ctx context.Context) (bool, error) {
+	endpoint := strings.TrimRight(c.BaseURL, "/") + "/api/principal?limit=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false, err
@@ -67,20 +74,24 @@ func (c *Client) hasJMAPManagement(ctx context.Context) (bool, error) {
 	req.SetBasicAuth(c.Username, c.Password)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return false, fmt.Errorf("stalwartapi: reach %s: %w", endpoint, err)
+		return false, fmt.Errorf("stalwartapi: probe %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("stalwartapi: session discovery at %s returned %s", endpoint, resp.Status)
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// The path exists but these credentials can't use it. Say so here
+		// rather than falling through to the other API and reporting a
+		// confusing error from there instead.
+		return false, fmt.Errorf("stalwartapi: %s returned %s - the credentials are not accepted for management operations", endpoint, resp.Status)
+	default:
+		return false, nil
 	}
-	var session struct {
-		Capabilities map[string]json.RawMessage `json:"capabilities"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
-		return false, fmt.Errorf("stalwartapi: parse session document from %s: %w", endpoint, err)
-	}
-	_, ok := session.Capabilities[stalwartManagementCapability]
-	return ok, nil
 }
 
 type restPrincipal struct {

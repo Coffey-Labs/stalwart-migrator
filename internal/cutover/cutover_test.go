@@ -388,3 +388,63 @@ func TestRunSchedulesOneQuotaTaskPerAccountAndWaits(t *testing.T) {
 		}
 	}
 }
+
+// A full migration crash-looped 28 times on "Failed to read data store
+// settings: Permission denied" because the converted config was written as
+// root while the service runs as its own user. The failure surfaced minutes
+// later in the journal, not at the moment of the mistake, which is what
+// makes it worth a test rather than care.
+func TestRunInstallsTheConfigWithOwnershipTheServiceCanRead(t *testing.T) {
+	store, rs, opts := migratedRun(t)
+	dir := t.TempDir()
+
+	// The config being replaced, standing in for the one the old version
+	// ran with - restrictive mode, so a naive copy would lock the service
+	// out of its own config.
+	oldConfig := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(oldConfig, []byte("[server]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	converted := filepath.Join(dir, "converted.json")
+	if err := os.WriteFile(converted, []byte(`{"@type":"RocksDb","path":"/opt/stalwart/data"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(dir, "config.json")
+
+	opts.ConfigSource = converted
+	opts.ConfigPath = installed
+	opts.ConfigOwnerReference = oldConfig
+
+	report, err := Run(context.Background(), store, rs, opts)
+	if err != nil {
+		t.Fatalf("Run: %v\n%s", err, report)
+	}
+	if got := readFile(t, installed); !strings.Contains(got, "RocksDb") {
+		t.Errorf("installed config = %q, want the converted one", got)
+	}
+	info, err := os.Stat(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mode comes from the file being replaced, not from the source's 0600.
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("installed config mode = %v, want 0640 copied from the old config", info.Mode().Perm())
+	}
+	// The unit must point at the installed config, not the scratch copy.
+	if unit := readFile(t, opts.ServiceUnitPath); !strings.Contains(unit, installed) {
+		t.Errorf("unit does not reference the installed config:\n%s", unit)
+	}
+}
+
+func TestRunSkipsConfigInstallWhenThereIsNothingToInstall(t *testing.T) {
+	store, rs, opts := migratedRun(t)
+	report, err := Run(context.Background(), store, rs, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, res := range report.Results {
+		if res.Name == "install-config" && res.Status != StatusSkipped {
+			t.Errorf("install-config = %s, want skip when no ConfigSource is given", res.Status)
+		}
+	}
+}

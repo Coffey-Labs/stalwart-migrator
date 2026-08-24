@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
@@ -46,6 +47,16 @@ type Options struct {
 	// becomes the unit's --config argument.
 	ServiceUnitPath string
 	ConfigPath      string
+	// ConfigSource, if set, is installed to ConfigPath before the unit is
+	// repointed at it - the converted v0.16 config the migration produced.
+	// Its ownership and mode are copied from ConfigOwnerReference (the old
+	// config, normally), because the service does not run as root and a
+	// root-owned config it cannot read fails the service at startup, not at
+	// install time. That is not hypothetical: a full migration crash-looped
+	// 28 times on "Failed to read data store settings: Permission denied"
+	// for exactly this reason.
+	ConfigSource         string
+	ConfigOwnerReference string
 
 	// RecoveryPointConfirmed is the operator asserting that a recovery
 	// point exists for this machine. This tool does not take one, verify
@@ -88,6 +99,7 @@ type Plan struct {
 	BinaryPath        string
 	ServiceUnitPath   string
 	ConfigPath        string
+	ConfigSource      string
 	RecalculateQuotas bool
 }
 
@@ -95,7 +107,10 @@ func (p Plan) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "cutover plan for run %s:\n", p.RunID)
 	fmt.Fprintf(&b, "  1. confirm %s really is %s, then install it as %s\n", p.StagedBinaryPath, p.TargetVersion, p.BinaryPath)
-	fmt.Fprintf(&b, "  2. preserve %s, then point its ExecStart at the new binary and strip any recovery-mode env vars\n", p.ServiceUnitPath)
+	if p.ConfigSource != "" {
+		fmt.Fprintf(&b, "  2. install %s as %s, owned so the service user can read it\n", p.ConfigSource, p.ConfigPath)
+	}
+	fmt.Fprintf(&b, "  3. preserve %s, then point its ExecStart at the new binary and strip any recovery-mode env vars\n", p.ServiceUnitPath)
 	fmt.Fprintf(&b, "  3. reload the service definition and start %s\n", p.Target)
 	fmt.Fprint(&b, "  4. wait for it to answer an authenticated JMAP session request\n")
 	if p.RecalculateQuotas {
@@ -116,6 +131,7 @@ func BuildPlan(rs *checkpoint.RunState, opts Options) (Plan, error) {
 		RunID: rs.RunID, TargetVersion: rs.TargetVersion,
 		StagedBinaryPath: opts.StagedBinaryPath, BinaryPath: opts.BinaryPath,
 		ServiceUnitPath: opts.ServiceUnitPath, ConfigPath: opts.ConfigPath,
+		ConfigSource:      opts.ConfigSource,
 		RecalculateQuotas: opts.RecalculateQuotas,
 	}
 
@@ -235,6 +251,22 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		}
 		rs.RecordArtifact(ArtifactNewBinary, checkpoint.Artifact{Path: plan.BinaryPath, SHA256: sum, SizeBytes: size})
 		return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%d bytes)", plan.StagedBinaryPath, plan.BinaryPath, size)}, nil
+	}); err != nil {
+		return report, err
+	}
+
+	if err := step("install-config", func() (checkpoint.StepOutcome, error) {
+		if plan.ConfigSource == "" {
+			return checkpoint.StepOutcome{
+				Verdict: string(StatusSkipped),
+				Detail:  "no converted config to install - the unit is repointed at whatever is already at ConfigPath",
+			}, nil
+		}
+		owner, err := installConfig(plan.ConfigSource, plan.ConfigPath, opts.ConfigOwnerReference)
+		if err != nil {
+			return checkpoint.StepOutcome{}, err
+		}
+		return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%s)", plan.ConfigSource, plan.ConfigPath, owner)}, nil
 	}); err != nil {
 		return report, err
 	}
@@ -497,4 +529,45 @@ func hashFile(path string) (sha256Hex string, size int64, err error) {
 		return "", 0, fmt.Errorf("cutover: hash %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// installConfig places the converted config at dst, copying ownership and
+// mode from reference (normally the config being replaced) so the service
+// user can still read it.
+//
+// Ownership is the whole point of this function. Writing a config as root
+// is the natural thing for a tool running as root to do, and it produces a
+// service that starts, fails to read its own config, and restarts forever -
+// a failure that shows up minutes later in the journal rather than at the
+// moment of the mistake. Where no reference is available the file is left
+// world-readable, since a config the service cannot read is worse than one
+// other local users can.
+func installConfig(src, dst, reference string) (ownership string, err error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", fmt.Errorf("cutover: read converted config %s: %w", src, err)
+	}
+
+	perm := os.FileMode(0o644)
+	uid, gid := -1, -1
+	if reference == "" {
+		reference = dst // fall back to whatever is already in place
+	}
+	if info, statErr := os.Stat(reference); statErr == nil {
+		perm = info.Mode().Perm()
+		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid, gid = int(sys.Uid), int(sys.Gid)
+		}
+	}
+
+	if err := writeFileAtomic(dst, data, perm); err != nil {
+		return "", err
+	}
+	if uid >= 0 && gid >= 0 {
+		if err := os.Chown(dst, uid, gid); err != nil {
+			return "", fmt.Errorf("cutover: set ownership on %s to %d:%d - the service runs as that user and cannot read a config it does not own: %w", dst, uid, gid, err)
+		}
+		return fmt.Sprintf("uid %d, gid %d, mode %v", uid, gid, perm), nil
+	}
+	return fmt.Sprintf("mode %v, ownership unchanged (no reference file to copy it from)", perm), nil
 }

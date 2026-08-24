@@ -39,12 +39,16 @@ type methodResponse struct {
 	CallID string
 }
 
-// call POSTs one JMAP-style request to the management API (Stalwart's /api
-// endpoint - see docs/ref/object/account.md, which is distinct from /jmap)
-// using this Client's own credentials, and returns its parsed method
-// responses in order.
+// call POSTs one JMAP-style request to the management API using this
+// Client's own credentials, and returns its parsed method responses in
+// order. The endpoint is discovered from the instance's session document -
+// see apiEndpoint for why it is not simply BaseURL + "/api".
 func (c *Client) call(ctx context.Context, using []string, methodCalls []any) ([]methodResponse, error) {
-	return c.callAs(ctx, c.Username, c.Password, strings.TrimRight(c.BaseURL, "/")+"/api", using, methodCalls)
+	endpoint, err := c.apiEndpoint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.callAs(ctx, c.Username, c.Password, endpoint, using, methodCalls)
 }
 
 // callAs is call's underlying primitive: it accepts an explicit
@@ -128,14 +132,12 @@ type account struct {
 // exactly what's missing rather than silently treating an unreachable
 // account's mailboxes as having zero messages.
 func (c *Client) AccountSnapshot(ctx context.Context) (*Snapshot, error) {
-	isJMAP, err := c.hasJMAPManagement(ctx)
+	isREST, err := c.hasRESTManagement(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("stalwartapi: discover which management API this instance speaks: %w", err)
 	}
-	if !isJMAP {
-		// No urn:stalwart:jmap: this is a 0.15.x instance, whose
-		// management API is REST. Confirmed against a live 0.15.5 server -
-		// see principal.go.
+	if isREST {
+		// v0.15.x: REST at /api/principal. See principal.go.
 		return c.principalSnapshotREST(ctx)
 	}
 	return c.accountSnapshotJMAP(ctx)
@@ -205,13 +207,43 @@ func (c *Client) accountSnapshotJMAP(ctx context.Context) (*Snapshot, error) {
 	}, nil
 }
 
+// describeJMAPError turns a JMAP method-level error into something an
+// operator can act on.
+//
+// "forbidden" gets special handling because of where it shows up: against a
+// freshly migrated instance, an account that held the admin role before the
+// migration was refused x:Account/query afterwards. Whether the role failed
+// to carry over or v0.16 requires different permissions was not isolated,
+// but the operator's situation is the same either way - they have an admin
+// account that can no longer administer - and a bare "forbidden" gives them
+// nothing to go on.
+func describeJMAPError(method string, args json.RawMessage) error {
+	var parsed struct {
+		Type        string `json:"type"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(args, &parsed); err != nil || parsed.Type == "" {
+		return fmt.Errorf("stalwartapi: %s error: %s", method, args)
+	}
+	if parsed.Type == "forbidden" {
+		return fmt.Errorf("stalwartapi: %s was refused (forbidden): %s - this account is authenticated but not "+
+			"permitted to perform management operations. After a v0.16 migration this is worth checking first: an "+
+			"account that held the admin role beforehand may not have it afterwards",
+			method, parsed.Description)
+	}
+	if parsed.Description != "" {
+		return fmt.Errorf("stalwartapi: %s error (%s): %s", method, parsed.Type, parsed.Description)
+	}
+	return fmt.Errorf("stalwartapi: %s error: %s", method, parsed.Type)
+}
+
 func accountQueryIDs(responses []methodResponse) ([]string, error) {
 	if len(responses) == 0 {
 		return nil, fmt.Errorf("stalwartapi: Account/query returned no method responses")
 	}
 	r := responses[0]
 	if r.Name == "error" {
-		return nil, fmt.Errorf("stalwartapi: Account/query error: %s", r.Args)
+		return nil, describeJMAPError("Account/query", r.Args)
 	}
 	var result struct {
 		IDs []string `json:"ids"`
@@ -228,7 +260,7 @@ func accountGetList(responses []methodResponse) ([]account, error) {
 	}
 	r := responses[0]
 	if r.Name == "error" {
-		return nil, fmt.Errorf("stalwartapi: Account/get error: %s", r.Args)
+		return nil, describeJMAPError("Account/get", r.Args)
 	}
 	var result struct {
 		List []account `json:"list"`

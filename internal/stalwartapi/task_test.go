@@ -28,6 +28,18 @@ func newTaskServer(t *testing.T) (*taskServer, *httptest.Server) {
 	t.Helper()
 	ts := &taskServer{queue: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
+			// The endpoint is discovered, not assumed - see apiEndpoint.
+			json.NewEncoder(w).Encode(map[string]any{
+				"apiUrl":       "/api",
+				"capabilities": map[string]any{"urn:stalwart:jmap": map[string]any{}},
+			})
+			return
+		}
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		call := body["methodCalls"].([]any)[0].([]any)

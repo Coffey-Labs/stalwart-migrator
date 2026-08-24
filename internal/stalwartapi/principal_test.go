@@ -181,3 +181,98 @@ func TestJMAPSnapshotCapturesUsedDiskQuota(t *testing.T) {
 		t.Errorf("UsedQuota = %v, want an entry per account", snap.UsedQuota)
 	}
 }
+
+// A fully configured, serving Stalwart 0.16.14 returns 404 for /api - the
+// endpoint this client used to assume. It advertises its JMAP endpoint in
+// the session document instead. This test pins the discovery so the
+// assumption can't creep back.
+func TestCallDiscoversTheEndpointRatherThanAssumingSlashApi(t *testing.T) {
+	var posted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"apiUrl":       "/jmap/",
+				"capabilities": map[string]any{"urn:stalwart:jmap": map[string]any{}},
+			})
+			return
+		}
+		posted = append(posted, r.URL.Path)
+		if r.URL.Path != "/jmap/" {
+			// Stand in for 0.16.14, which 404s anything else.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+			[]any{"x:Account/query", map[string]any{"ids": []string{}}, "q"},
+		}})
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Username: "admin", Password: "x"}
+	if _, err := client.AccountIDs(context.Background()); err != nil {
+		t.Fatalf("AccountIDs against an instance that only serves /jmap/: %v", err)
+	}
+	for _, p := range posted {
+		if p == "/api" {
+			t.Error("posted to /api, which 0.16.14 does not serve")
+		}
+	}
+	if len(posted) == 0 || posted[0] != "/jmap/" {
+		t.Errorf("posted to %v, want the advertised /jmap/", posted)
+	}
+}
+
+// A real instance advertises its canonical public URL, which routinely
+// isn't reachable from where this tool runs - a hostname that may not
+// resolve, over TLS that may not validate. Observed on a migrated
+// instance: "https://mail.smoke.test/jmap/" while the operator reached it
+// as http://127.0.0.1:8090. The path is the session's to dictate; the host
+// is the operator's.
+func TestEndpointKeepsTheOperatorsHostAndTheSessionsPath(t *testing.T) {
+	client := &Client{BaseURL: "http://127.0.0.1:8090"}
+	got, err := client.rebaseOntoBaseURL("https://mail.smoke.test/jmap/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:8090/jmap/" {
+		t.Errorf("endpoint = %q, want the advertised path on the operator's host", got)
+	}
+}
+
+func TestEndpointRefusesASessionWithNoAPIURL(t *testing.T) {
+	client := &Client{BaseURL: "http://127.0.0.1:8090"}
+	if _, err := client.rebaseOntoBaseURL(""); err == nil {
+		t.Fatal("want an error when the instance advertises no apiUrl")
+	}
+}
+
+// Observed on a freshly migrated 0.16.14: an account that held the admin
+// role before the migration was refused x:Account/query afterwards. A bare
+// "forbidden" leaves an operator with nowhere to start.
+func TestForbiddenExplainsThePostMigrationPermissionTrap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
+			json.NewEncoder(w).Encode(map[string]any{"apiUrl": "/jmap/"})
+			return
+		}
+		json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+			[]any{"error", map[string]any{"type": "forbidden", "description": "You are not authorized to perform this action"}, "q"},
+		}})
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Username: "sysadmin", Password: "x"}
+	_, err := client.AccountSnapshot(context.Background())
+	if err == nil {
+		t.Fatal("want an error for a forbidden management call")
+	}
+	for _, want := range []string{"forbidden", "admin role", "not permitted"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+}

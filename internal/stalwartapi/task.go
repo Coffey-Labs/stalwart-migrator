@@ -132,7 +132,7 @@ func (c *Client) setTasks(ctx context.Context, create map[string]any, subjectFor
 	}
 	r := responses[0]
 	if r.Name == "error" {
-		return nil, fmt.Errorf("stalwartapi: Task/set error: %s", r.Args)
+		return nil, describeJMAPError("Task/set", r.Args)
 	}
 	var result struct {
 		Created map[string]struct {
@@ -245,7 +245,7 @@ func (c *Client) taskStatuses(ctx context.Context, ids []string) (map[string]tas
 	}
 	r := responses[0]
 	if r.Name == "error" {
-		return nil, fmt.Errorf("stalwartapi: Task/get error: %s", r.Args)
+		return nil, describeJMAPError("Task/get", r.Args)
 	}
 	var result struct {
 		List []struct {

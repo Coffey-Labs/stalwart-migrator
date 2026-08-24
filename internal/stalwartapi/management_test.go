@@ -46,6 +46,10 @@ func accountManagementAndMailboxServer(t *testing.T, mailboxesFor map[string][]m
 	var apiURL string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
 		gotPaths = append(gotPaths, r.URL.Path)
 
 		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
@@ -182,6 +186,10 @@ func TestAccountSnapshotEmptyInstance(t *testing.T) {
 
 func TestAccountSnapshotPropagatesJMAPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
 		if serveJMAPSession(w, r, "/api") {
 			return
 		}

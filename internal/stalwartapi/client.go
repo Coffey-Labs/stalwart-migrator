@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +26,66 @@ type Client struct {
 	Username   string
 	Password   string
 	HTTPClient *http.Client
+
+	mu       sync.Mutex
+	endpoint string // resolved JMAP endpoint; see apiEndpoint
+}
+
+// apiEndpoint returns the URL to POST JMAP method calls to, discovered from
+// the instance's own session document rather than assumed.
+//
+// This used to be hardcoded as BaseURL + "/api", which is wrong for the
+// version this tool migrates *to*: a fully configured, serving 0.16.14
+// returns 404 for /api, and advertises its JMAP endpoint through the
+// session document's apiUrl instead (RFC 8620 §2 - discovery is how a
+// client is *supposed* to find it).
+//
+// The path is taken from apiUrl but re-based onto BaseURL's scheme and
+// host. A real instance advertises its canonical public URL - observed:
+// "https://mail.smoke.test/jmap/" - which frequently isn't reachable from
+// where this tool runs, over a hostname that may not resolve or a
+// certificate that may not validate. The operator told us how to reach
+// this server when they passed --admin-url; the session is only authoritative
+// about *where on it* the API lives.
+func (c *Client) apiEndpoint(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	cached := c.endpoint
+	c.mu.Unlock()
+	if cached != "" {
+		return cached, nil
+	}
+
+	session, err := c.fetchSession(ctx, c.Username, c.Password)
+	if err != nil {
+		return "", fmt.Errorf("stalwartapi: discover the JMAP endpoint: %w", err)
+	}
+	resolved, err := c.rebaseOntoBaseURL(session.APIURL)
+	if err != nil {
+		return "", err
+	}
+
+	c.mu.Lock()
+	c.endpoint = resolved
+	c.mu.Unlock()
+	return resolved, nil
+}
+
+// rebaseOntoBaseURL keeps the advertised path but the operator's host.
+func (c *Client) rebaseOntoBaseURL(apiURL string) (string, error) {
+	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
+	if err != nil {
+		return "", fmt.Errorf("stalwartapi: parse base URL %q: %w", c.BaseURL, err)
+	}
+	if apiURL == "" {
+		return "", fmt.Errorf("stalwartapi: the instance's session document advertises no apiUrl, so there is no JMAP endpoint to call")
+	}
+	advertised, err := url.Parse(apiURL)
+	if err != nil {
+		return "", fmt.Errorf("stalwartapi: parse advertised apiUrl %q: %w", apiURL, err)
+	}
+	base.Path = advertised.Path
+	base.RawQuery = advertised.RawQuery
+	return base.String(), nil
 }
 
 func (c *Client) httpClient() *http.Client {

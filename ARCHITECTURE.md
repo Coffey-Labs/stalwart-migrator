@@ -672,12 +672,39 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   corpus has been through the converter. Everything in §4.9's rewrite and
   most of §8's newer entries came from that, not from reading code.
 
-  Still unproven against real software: **cutover** (never executed - its
-  unit rewrite, service control and quota recalculation are tested only
-  against fakes), the **`x:Task` quota wire format**, **systemd drop-in**
-  handling, and anything on a **non-RocksDB backend** or a **Docker**
-  deployment. Cutover is the gap that matters most, since it is the phase
-  that mutates production.
+  **Cutover has now run**, in a complete 0.15.5 -> 0.16.14 migration of the
+  smoke VM: binary verified and installed, the unit rewritten with its
+  hardening intact, service restarted, health check passed, and checkpoint
+  resume exercised. All mail survived and was readable afterwards. Three
+  defects came out of it and are fixed:
+
+  - The converted config was installed root-owned while the service runs as
+    its own user, so it crash-looped 28 times on "Permission denied". The
+    ownership trap that retired the rollback implementation (§4.8), in a
+    new place. Cutover now installs the config itself, copying ownership
+    and mode from the config being replaced.
+  - **v0.16.14 does not serve `/api`.** Confirmed against a fully migrated,
+    fully configured instance, not just a sandbox: `/api`, `/api/principal`
+    and `/jmap/` all 404, and the JMAP endpoint is the one the session
+    document advertises. The client now discovers it, re-basing the
+    advertised path onto the operator's own host - a real instance
+    advertises a canonical public URL that frequently isn't reachable from
+    where this tool runs.
+  - Dispatching on the `urn:stalwart:jmap` capability was wrong, because
+    *neither* version advertises it. The client probes what the instance
+    actually serves instead.
+
+  Still unproven: the **`x:Task` quota wire format** (the endpoint fix makes
+  it reachable, but the migrated instance refused the call - below),
+  **systemd drop-in** handling, and anything on a **non-RocksDB backend**
+  or a **Docker** deployment.
+- **A migrated instance may have no working administrator.** An account
+  holding the admin role before migration was refused `x:Account/query`
+  afterwards with `forbidden`. Whether the role failed to carry or v0.16
+  requires different permissions was not isolated; the operator's position
+  is the same either way. The client now explains this rather than
+  reporting a bare "forbidden", but the underlying question is open and
+  gates both quota recalculation and any post-migration validation.
 - **Quota recalculation is grounded but unproven.** The `x:Task` wire
   format comes from Stalwart's schema reference rather than a live server;
   §4.5 lists exactly which two details are inferred. A smoke test against a

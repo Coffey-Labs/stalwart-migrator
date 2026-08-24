@@ -27,6 +27,10 @@ func fakeManagementServer(t *testing.T, accounts []map[string]any, mailboxesByEm
 	t.Helper()
 	var apiURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound) // v0.16 shape: no REST management API
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
 			user, _, _ := r.BasicAuth()
 			if !strings.Contains(user, "%") {
