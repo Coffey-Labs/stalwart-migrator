@@ -75,3 +75,9 @@ func ChecksumAsset(rel *Release) *ReleaseAsset {
 	}
 	return nil
 }
+
+// ReleaseAPIBase returns the release API endpoint, and SetReleaseAPIBase
+// overrides it. Both exist so other packages' tests can point release
+// lookups at a local server instead of the real GitHub API.
+func ReleaseAPIBase() string        { return githubAPIBase }
+func SetReleaseAPIBase(base string) { githubAPIBase = base }

@@ -20,19 +20,22 @@ them into a production run yet, so `run` still refuses.
 |---|---|
 | `stalwart-migrate preflight` | **Works** — read-only checks and a migration plan |
 | `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
-| `stalwart-migrate run` | **Refuses on purpose** — see below |
+| `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes` |
 | `stalwart-migrate status <id>` | **Works** |
 | `stalwart-migrate report <id>` | Not implemented |
 
-**`run` deliberately refuses to proceed.** Cutover (ARCHITECTURE.md §4.5) is
-implemented, but nothing calls it: the staging phase (§4.3) and the pipeline
-that would run preflight → backup → stage → recovery-mode → cutover →
-validate against real paths don't exist yet. `run` stops rather than going
-partway. That refusal is the correct behaviour today, not a bug.
+**`run` performs the migration**, in the order
+preflight → stage → dump → stop → convert → recovery-mode → cutover. It
+needs two flags: `--yes` (intent) and `--recovery-point-confirmed` (a claim
+that you have a snapshot or backup you have verified you can restore — this
+tool cannot undo a migration and will not start without it).
 
-**Start with `rehearse` instead.** It is read-only, needs no maintenance
-window, and answers the question that actually shapes a migration plan —
-see below.
+**Start with `rehearse` first.** It is read-only, needs no maintenance
+window, and tells you what `run` will and won't carry over.
+
+Measured on a full migration: the store converts in seconds, and the service
+was down for **6 seconds** end to end. Plan the window around verification,
+not data volume.
 
 Package state:
 

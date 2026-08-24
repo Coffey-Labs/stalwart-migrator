@@ -829,6 +829,22 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   - `tenant-admin` has no v0.16 equivalent and is reported as unrestorable
     rather than silently dropped.
 
+- **`run` is built and works.** preflight -> stage -> dump -> preserve ->
+  stop -> convert -> supplement -> recovery-mode -> cutover, checkpointed
+  throughout, verified end to end against a real 0.15.5: mail down for six
+  seconds, users unchanged, and `recalculate-quotas` succeeding for the
+  first time - the `x:Task` wire format inferred from the schema reference
+  turned out to be right, once the endpoint discovery and role restoration
+  made it reachable at all.
+
+  Two gates, deliberately separate: `--yes` is about intent, and
+  `--recovery-point-confirmed` is a claim about the world that this tool
+  cannot verify and must not assume. `internal/stage` (§4.3) fetches the
+  release, refuses to substitute a different build for the one it wants,
+  honours a pinned checksum, and confirms the extracted binary reports the
+  version its tag claims - because everything upstream of that check is an
+  assumption about somebody else's release process.
+
 - **`rehearse` (§4.9) is designed but not built.** The command is still
   `run --dry-run` with the old sandbox-cloning shape. Building it is mostly
   deletion: the dump, convert and report pieces already exist and work
