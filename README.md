@@ -112,6 +112,18 @@ It copies no data, clones nothing, starts no server, and never writes to the
 store, so it is safe to run against production repeatedly and without a
 maintenance window.
 
+It also generates a **supplemental plan** for the part it can rebuild
+automatically — currently your network listeners, which is the difference
+between a migrated server that answers and one that doesn't — and reports
+exactly how much of the worklist that covers (on a test instance: 24 of
+3,505 keys, and it says so rather than implying more). Review it, then apply
+it after `export.json`:
+
+```sh
+stalwart-cli apply --file <state-dir>/runs/<run-id>/supplement.json \
+    --url https://mail.example.com
+```
+
 Expect the worklist to be long. Measured against a real production instance,
 `migrate_v016.py` carried **219 of 12,401 settings — 1.8%**. The rest,
 including `server.listener`, has to be rebuilt by hand; until it is, a

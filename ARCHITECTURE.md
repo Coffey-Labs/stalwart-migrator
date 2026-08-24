@@ -204,10 +204,32 @@ pre-migration instance is still up, rather than after it isn't.
   production instance, `migrate_v016.py` migrated 219 of 12,401 settings —
   1.8% — leaving 12,182 for the operator to recreate by hand, including
   `server.listener`. A migrated instance therefore serves nothing until
-  somebody rebuilds its listeners, whatever else went right. Something has
-  to generate that plan; the only question is whether it is this tool,
-  reviewably, or a human under time pressure during a cutover window.
-  `unmigrated.txt` (§4.9) is the input it should be built from.
+  somebody rebuilds its listeners, whatever else went right.
+
+  **Status: started** (`internal/applyplan`), generating `NetworkListener`
+  objects from `server.listener.*` and reporting its own coverage. Listeners
+  came first because every other unmigrated setting degrades the server
+  while this one stops it being a server at all.
+
+  Two rules the package holds to:
+
+  - **Only mappings confirmed against a real v0.16 binary go in.** The
+    published schema reference gives `NetworkListener.bind` as a JSON
+    array; 0.16.14 rejects that. The encoding it accepts — a value-keyed
+    set, `{"[::]:25": true}` — was found by applying a plan to a live
+    recovery-mode instance and reading it back with `stalwart-cli
+    snapshot`. An unverified guess here produces a plan that fails at apply
+    time or, worse, quietly configures the wrong thing.
+  - **Coverage is reported, never implied.** Against the smoke instance the
+    generator covers 24 of 3,505 unmigrated keys and says "0.7%", listing
+    the largest groups it did not touch. A plan that covered a fraction
+    while implying completeness would be worse than no plan.
+
+  Operations are emitted as `upsert` with `matchOn: ["name"]`, so a plan
+  can be re-run — an operator will run it more than once — and the
+  supplement is applied *after* `export.json` rather than merged into it,
+  so a generated mapping can never override one the official script got
+  right.
 - Stage new systemd unit / Compose file changes without activating them.
 
 ### 4.4 Recovery-mode migration
@@ -577,13 +599,16 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   script is Stalwart's, not ours — need a policy for what happens when it
   changes upstream (re-vendor + re-test before bumping the pin, never
   silently float to `main`).
-- **Settings apply-plan (§4.3): now the critical path, not an enhancement.**
-  Measured against production, `migrate_v016.py` carries 1.8% of the
-  settings; `server.listener` is not among them, so a migrated instance
-  answers on no ports until the rest is rebuilt. Building this from
-  `unmigrated.txt` is what would make both a meaningful rehearsal and a
-  working cutover possible. It should still require explicit operator
-  sign-off even with `--yes` set for everything else.
+- **Settings apply-plan (§4.3): started, and the critical path.**
+  `internal/applyplan` covers `server.listener` — verified end to end by
+  applying a generated plan to a real 0.16.14 instance and reading back all
+  ten listeners with correct protocols, binds and TLS flags. Everything
+  else in the worklist is still manual: the largest groups are
+  `lookup.url-redirectors`, `lookup.trusted-domains`, `spam-filter.list`,
+  `spam-filter.rule` and `spam-filter.dnsbl`, each needing its own
+  confirmed mapping (`x:StoreLookup`, `x:HttpLookup`, `x:SpamRule`,
+  `x:SpamDnsblServer`). The generated plan should still require explicit
+  operator sign-off even with `--yes` set for everything else.
 - **Account/mailbox enumeration** (`stalwartapi.Client.AccountSnapshot`):
   **implemented**, including per-mailbox message counts. Account count and
   domains come from `x:Account/query` + `x:Account/get` against Stalwart's

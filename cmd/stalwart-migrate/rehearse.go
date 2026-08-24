@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/applyplan"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/backup"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/plan"
@@ -84,6 +85,7 @@ func runRehearse(args []string) (err error) {
 	// files that aren't there.
 	keptWorklist := filepath.Join(runStateDir, "unmigrated.txt")
 	keptPlan := filepath.Join(runStateDir, "export.json")
+	keptSupplement := filepath.Join(runStateDir, "supplement.json")
 	defer func() {
 		if _, statErr := os.Stat(runWorkDir); os.IsNotExist(statErr) {
 			return
@@ -211,8 +213,17 @@ func runRehearse(args []string) (err error) {
 			}
 		}
 		fmt.Printf("\n  !! %s\n", unmigrated.Summary(10))
-		fmt.Println("     These do not carry over. Rebuild them on the migrated instance before it serves mail -")
-		fmt.Println("     note that server.listener is typically among them, so until you do, it answers on nothing.")
+		fmt.Println("     These do not carry over on their own. See the supplemental plan below for the part")
+		fmt.Println("     this tool can rebuild for you.")
+	}
+
+	// Generate what we can of the gap (ARCHITECTURE.md §4.3). This is
+	// best-effort by design and reports its own coverage: the plan is
+	// worth having precisely because it is honest about how much of the
+	// worklist it does not touch.
+	fmt.Println("\n--- supplemental plan (best-effort) ---")
+	if err := generateSupplement(store, rs, settingsPath, unmigratedPath, keptSupplement); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: couldn't generate the supplemental plan: %v\n", err)
 	}
 	if err := store.Save(rs); err != nil {
 		return fmt.Errorf("save run state: %w", err)
@@ -243,4 +254,55 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Sync()
+}
+
+// generateSupplement builds the best-effort apply plan for settings
+// migrate_v016.py left behind, writes it beside the run's other
+// conclusions, and reports honestly how much of the gap it closed.
+//
+// It is deliberately applied *after* export.json rather than merged into
+// it: the official conversion is the authority on everything it handles,
+// and a generated plan that overlapped it could silently override a
+// correct mapping with a guessed one.
+func generateSupplement(store *checkpoint.Store, rs *checkpoint.RunState, settingsPath, unmigratedPath, outPath string) error {
+	settings, err := backup.ReadSettingsDump(settingsPath)
+	if err != nil {
+		return err
+	}
+	unmigrated, err := backup.ReadUnmigratedKeys(unmigratedPath, settings)
+	if err != nil {
+		return err
+	}
+
+	plan, coverage, err := applyplan.Build(settings, unmigrated, applyplan.DefaultGenerators())
+	if err != nil {
+		return err
+	}
+	if len(plan.Operations) == 0 {
+		fmt.Println("nothing this tool can rebuild automatically yet - the whole worklist is manual")
+		return nil
+	}
+	if err := plan.WriteNDJSON(outPath); err != nil {
+		return err
+	}
+	if sum, size, hashErr := backup.HashFile(outPath); hashErr == nil {
+		rs.RecordArtifact("supplemental-plan", checkpoint.Artifact{Path: outPath, SHA256: sum, SizeBytes: size})
+	}
+
+	fmt.Printf("%s\n", coverage.Summary(6))
+	for _, w := range coverage.Warnings {
+		fmt.Printf("      warning: %s\n", w)
+	}
+	fmt.Printf("\n  supplement:  %s\n", outPath)
+	fmt.Println("  Review it, then apply it after export.json:")
+	fmt.Printf("      stalwart-cli apply --file %s --url <migrated-instance>\n", outPath)
+	fmt.Println("  It is generated, not authoritative - read it before you run it.")
+
+	_, err = store.RunStep(rs, checkpoint.PhaseStage, "supplemental-plan", func() (checkpoint.StepOutcome, error) {
+		return checkpoint.StepOutcome{
+			Detail: fmt.Sprintf("generated %d operation(s) covering %d of %d unmigrated setting(s)",
+				len(plan.Operations), coverage.CoveredKeys, coverage.TotalKeys),
+		}, nil
+	})
+	return err
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -262,4 +263,52 @@ func ReadUnmigratedReport(path string) (*UnmigratedReport, error) {
 	}
 	sort.Slice(report.Prefixes, func(i, j int) bool { return report.Prefixes[i].Keys > report.Prefixes[j].Keys })
 	return report, nil
+}
+
+// ReadSettingsDump loads the flat {key: value} settings map
+// migrate_v016.py's dump step writes.
+func ReadSettingsDump(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("backup: read settings dump %s: %w", path, err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("backup: parse settings dump %s: %w", path, err)
+	}
+	settings := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			settings[k] = s
+			continue
+		}
+		settings[k] = fmt.Sprint(v)
+	}
+	return settings, nil
+}
+
+// ReadUnmigratedKeys returns the set of settings keys migrate_v016.py
+// reported it did not carry over.
+//
+// unmigrated.txt lists prefixes and counts rather than individual keys, so
+// this expands those prefixes against the settings dump. That is why it
+// needs both files: the report says "spam-filter.rule: 424 keys", and only
+// the dump knows which 424.
+func ReadUnmigratedKeys(reportPath string, settings map[string]string) (map[string]bool, error) {
+	report, err := ReadUnmigratedReport(reportPath)
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]bool{}
+	if report == nil {
+		return keys, nil
+	}
+	for _, p := range report.Prefixes {
+		for k := range settings {
+			if k == p.Prefix || strings.HasPrefix(k, p.Prefix+".") {
+				keys[k] = true
+			}
+		}
+	}
+	return keys, nil
 }
