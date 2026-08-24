@@ -222,7 +222,7 @@ func runRehearse(args []string) (err error) {
 	// worth having precisely because it is honest about how much of the
 	// worklist it does not touch.
 	fmt.Println("\n--- supplemental plan (best-effort) ---")
-	if err := generateSupplement(store, rs, settingsPath, unmigratedPath, keptSupplement); err != nil {
+	if err := generateSupplement(store, rs, settingsPath, principalsPath, unmigratedPath, keptSupplement); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: couldn't generate the supplemental plan: %v\n", err)
 	}
 	if err := store.Save(rs); err != nil {
@@ -264,7 +264,7 @@ func copyFile(src, dst string) error {
 // it: the official conversion is the authority on everything it handles,
 // and a generated plan that overlapped it could silently override a
 // correct mapping with a guessed one.
-func generateSupplement(store *checkpoint.Store, rs *checkpoint.RunState, settingsPath, unmigratedPath, outPath string) error {
+func generateSupplement(store *checkpoint.Store, rs *checkpoint.RunState, settingsPath, principalsPath, unmigratedPath, outPath string) error {
 	settings, err := backup.ReadSettingsDump(settingsPath)
 	if err != nil {
 		return err
@@ -277,6 +277,24 @@ func generateSupplement(store *checkpoint.Store, rs *checkpoint.RunState, settin
 	plan, coverage, err := applyplan.Build(settings, unmigrated, applyplan.DefaultGenerators())
 	if err != nil {
 		return err
+	}
+
+	// Account roles don't live in the settings dump, so they come from the
+	// principals dump rather than through a settings Generator. Without
+	// this the migrated instance has no administrator: migrate_v016.py
+	// gives every account the User role, whatever it had before.
+	principals, err := backup.ReadPrincipalsDump(principalsPath)
+	if err != nil {
+		return err
+	}
+	roleOps, _, roleWarnings, err := applyplan.AccountRoleOperations(principals)
+	if err != nil {
+		return err
+	}
+	plan.Operations = append(plan.Operations, roleOps...)
+	coverage.Warnings = append(coverage.Warnings, roleWarnings...)
+	if len(roleOps) > 0 {
+		coverage.ObjectsByType["Account role"] += len(roleOps)
 	}
 	if len(plan.Operations) == 0 {
 		fmt.Println("nothing this tool can rebuild automatically yet - the whole worklist is manual")

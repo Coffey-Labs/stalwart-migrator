@@ -312,3 +312,28 @@ func ReadUnmigratedKeys(reportPath string, settings map[string]string) (map[stri
 	}
 	return keys, nil
 }
+
+// Principal is the subset of a v0.15 principals dump this tool needs. The
+// shape is what the REST management API returns and what
+// migrate_v016.py's dump step writes out verbatim.
+type Principal struct {
+	ID     int      `json:"id"`
+	Type   string   `json:"type"` // "individual", "group", "domain", ...
+	Name   string   `json:"name"`
+	Emails []string `json:"emails"`
+	Roles  []string `json:"roles"`
+}
+
+// ReadPrincipalsDump loads the principals dump written alongside the
+// settings dump.
+func ReadPrincipalsDump(path string) ([]Principal, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("backup: read principals dump %s: %w", path, err)
+	}
+	var principals []Principal
+	if err := json.Unmarshal(data, &principals); err != nil {
+		return nil, fmt.Errorf("backup: parse principals dump %s: %w", path, err)
+	}
+	return principals, nil
+}

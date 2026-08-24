@@ -698,13 +698,29 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   it reachable, but the migrated instance refused the call - below),
   **systemd drop-in** handling, and anything on a **non-RocksDB backend**
   or a **Docker** deployment.
-- **A migrated instance may have no working administrator.** An account
-  holding the admin role before migration was refused `x:Account/query`
-  afterwards with `forbidden`. Whether the role failed to carry or v0.16
-  requires different permissions was not isolated; the operator's position
-  is the same either way. The client now explains this rather than
-  reporting a bare "forbidden", but the underlying question is open and
-  gates both quota recalculation and any post-migration validation.
+- **A migrated instance has no working administrator - diagnosed and
+  fixed.** `migrate_v016.py` assigns every migrated account the `User`
+  role regardless of what it held before, so an account that was an
+  administrator in v0.15 comes out authenticating normally and refused
+  every management call. Ordinary users are unaffected: `User` is what they
+  had and what they get, and their credentials, mail and mailboxes all
+  survive untouched.
+
+  The v0.16 shape came from the server's own schema document
+  (`GET /api/schema`): `x:UserRoles` is a multi-variant type with variants
+  `User`, `Admin` and `Custom`, and `Account` is itself multi-variant, so
+  the upsert needs its own `@type` as well. `applyplan.AccountRoleOperations`
+  restores it from the principals dump, emitting operations only for
+  accounts whose role actually changes - rewriting every account would be a
+  far larger blast radius for no benefit. Where v0.15 listed several roles,
+  admin wins and the collapse is reported; roles with no v0.16 equivalent
+  are named rather than dropped silently.
+- **`x:Account.domainId` returns an internal id on v0.16, not a domain
+  name.** A pre-migration snapshot records domains as names
+  ("smoke.test"); the same instance after migration reports "b". The
+  directory comparison in §4.7 would read that as every domain having
+  vanished. Resolving ids to names needs an `x:Domain/get` call that hasn't
+  been confirmed against the binary yet.
 - **Quota recalculation is grounded but unproven.** The `x:Task` wire
   format comes from Stalwart's schema reference rather than a live server;
   §4.5 lists exactly which two details are inferred. A smoke test against a
