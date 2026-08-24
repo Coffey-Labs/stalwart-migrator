@@ -111,3 +111,53 @@ func TestAccountRolesReportsRolesItCannotMap(t *testing.T) {
 		t.Errorf("warnings = %v, want the unmappable role named", warnings)
 	}
 }
+
+// Found by a dress rehearsal against a clone of production, where accounts
+// are named by address. v0.16 stores an account as a local part plus a
+// domain reference, and rejects a full address outright ("Invalid email
+// local part"). The smoke instance used bare names and never exercised it.
+func TestAccountRolesUsesTheLocalPartOfAnEmailStyleName(t *testing.T) {
+	ops, _, warnings, err := AccountRoleOperations([]backup.Principal{
+		{Type: "individual", Name: "john@linuxexperts.net", Emails: []string{"john@linuxexperts.net"}, Roles: []string{"admin"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("generated %d op(s), want 1", len(ops))
+	}
+	v := ops[0].Value["role-john"]
+	if v == nil {
+		t.Fatalf("operation not keyed by local part: %+v", ops[0].Value)
+	}
+	if v["name"] != "john" {
+		t.Errorf("name = %v, want the local part \"john\" - the full address is rejected by the server", v["name"])
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
+	}
+}
+
+// Local parts are unique only within a domain. Granting Admin to the wrong
+// account is worse than granting it to none.
+func TestAccountRolesRefusesAnAmbiguousLocalPart(t *testing.T) {
+	ops, covered, warnings, err := AccountRoleOperations([]backup.Principal{
+		{Type: "individual", Name: "postmaster@one.example", Roles: []string{"admin"}},
+		{Type: "individual", Name: "postmaster@two.example", Roles: []string{"user"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 0 {
+		t.Errorf("generated %d op(s) for an ambiguous local part, want 0 - it could land on the wrong account", len(ops))
+	}
+	if len(covered) != 0 {
+		t.Errorf("covered = %v, want none", covered)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "share the local part") {
+		t.Errorf("warnings = %v, want one explaining the ambiguity", warnings)
+	}
+	if !strings.Contains(warnings[0], "by hand") {
+		t.Errorf("warning %q should tell the operator what to do instead", warnings[0])
+	}
+}

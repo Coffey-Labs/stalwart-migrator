@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -279,6 +280,45 @@ func (c *Client) WaitForPing(ctx context.Context, timeout time.Duration) error {
 		}
 		if !time.Now().Before(deadline) {
 			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// WaitForResponse polls until the instance answers an HTTP request at all,
+// whatever the status, or timeout elapses.
+//
+// This is the liveness question, and it is deliberately separate from
+// WaitForPing's "and my credentials work". A 401 proves the server is up,
+// listening and routing - which is exactly what a caller waiting for a
+// restarted service needs to know. Conflating the two failed a cutover
+// that had in fact succeeded: the credentials supplied for the
+// pre-migration instance were a config fallback-admin, which does not
+// survive into v0.16 (its config is a store pointer, so the old
+// [authentication.fallback-admin] block is simply gone), so every poll came
+// back 401 and the phase reported the service as never having answered.
+func (c *Client) WaitForResponse(ctx context.Context, timeout time.Duration) error {
+	url := strings.TrimRight(c.BaseURL, "/") + "/.well-known/jmap"
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		req.SetBasicAuth(c.Username, c.Password)
+		resp, err := c.httpClient().Do(req)
+		if err == nil {
+			resp.Body.Close()
+			return nil
+		}
+		lastErr = err
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("stalwartapi: %s did not respond within %s: %w", url, timeout, lastErr)
 		}
 		select {
 		case <-ctx.Done():

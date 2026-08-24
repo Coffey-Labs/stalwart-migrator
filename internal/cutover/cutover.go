@@ -340,8 +340,24 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 			}, nil
 		}
 		client := newClient(opts)
-		if err := client.WaitForPing(ctx, healthTimeout); err != nil {
+		// Liveness first, and on its own. Any response - 401 included -
+		// proves the service is up and routing.
+		if err := client.WaitForResponse(ctx, healthTimeout); err != nil {
 			return checkpoint.StepOutcome{}, fmt.Errorf("the migrated service started but never answered at %s within %s: %w", opts.AdminURL, healthTimeout, err)
+		}
+		// Credentials are a separate question, and failing them is not a
+		// failed cutover. A config fallback-admin does not survive into
+		// v0.16 - its config is just a store pointer, so the old
+		// [authentication.fallback-admin] block is gone - so the
+		// credentials that worked before the migration routinely stop
+		// working after it, on an instance that is otherwise fine.
+		if err := client.Ping(ctx); err != nil {
+			return checkpoint.StepOutcome{
+				Verdict: string(StatusWarn),
+				Detail: fmt.Sprintf("migrated instance is up and answering at %s, but these admin credentials no longer work: %v. "+
+					"If they were a config fallback-admin, that does not survive the migration - v0.16 keeps its config in the store. "+
+					"Authenticate as an account that exists in the directory instead", opts.AdminURL, err),
+			}, nil
 		}
 		return checkpoint.StepOutcome{Detail: fmt.Sprintf("migrated instance answered an authenticated JMAP session request at %s", opts.AdminURL)}, nil
 	}); err != nil {

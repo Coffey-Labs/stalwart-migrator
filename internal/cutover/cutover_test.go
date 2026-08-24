@@ -231,22 +231,50 @@ func TestRunResumesWithoutRedoingCompletedSteps(t *testing.T) {
 
 func TestRunFailsWhenTheMigratedServiceNeverAnswers(t *testing.T) {
 	store, rs, opts := migratedRun(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-	}))
-	defer srv.Close()
-	opts.AdminURL = srv.URL
+	// Nothing listening at all: a closed port, not an error response.
+	opts.AdminURL = "http://127.0.0.1:1"
 	opts.HealthTimeout = 300 * time.Millisecond
 
 	report, err := Run(context.Background(), store, rs, opts)
 	if err == nil {
-		t.Fatal("Run: want failure when the started service never answers, got nil")
+		t.Fatal("Run: want failure when nothing answers at all, got nil")
 	}
 	if !strings.Contains(err.Error(), "never answered") {
 		t.Errorf("error %q should distinguish 'started but not answering' from 'failed to start'", err)
 	}
 	if !report.Blocking() {
 		t.Error("report should be blocking")
+	}
+}
+
+// A 401 proves the service is up and routing. Treating it as unhealthy
+// failed a cutover that had actually succeeded: the credentials supplied
+// for the pre-migration instance were a config fallback-admin, which does
+// not survive into v0.16.
+func TestRunWarnsRatherThanFailsWhenCredentialsStopWorking(t *testing.T) {
+	store, rs, opts := migratedRun(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	opts.AdminURL = srv.URL
+	opts.HealthTimeout = 2 * time.Second
+
+	report, err := Run(context.Background(), store, rs, opts)
+	if err != nil {
+		t.Fatalf("a service that is up but rejects these credentials is not a failed cutover: %v\n%s", err, report)
+	}
+	var warned bool
+	for _, res := range report.Results {
+		if res.Name == "wait-healthy" {
+			warned = res.Status == StatusWarn
+			if !strings.Contains(res.Detail, "fallback-admin") {
+				t.Errorf("warning %q should name the likely cause", res.Detail)
+			}
+		}
+	}
+	if !warned {
+		t.Errorf("wait-healthy should warn, not fail or pass silently:\n%s", report)
 	}
 }
 

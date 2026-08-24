@@ -794,6 +794,41 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   them and refusing.
 - **Nothing prevents concurrent runs.** Two invocations against the same
   run-id would both proceed; there's no lock file or equivalent.
+- **A full dress rehearsal has been run against a clone of production** -
+  the real 3.6 GB store, 12,361 settings, 6 accounts across 9 domains,
+  streamed into the smoke VM and migrated 0.15.5 -> 0.16.14 with the tool's
+  own phases. It succeeded, and the timings are the useful part: the
+  recovery-mode conversion of that store took **2 seconds**, and the whole
+  sequence from service-stop to service-start was seconds of work. A
+  migration window is dominated by waiting and verification, not by data
+  volume - worth knowing before scheduling one around store size.
+
+  Four things it found that smaller instances could not:
+
+  - **Account roles broke on production-shaped names.** v0.16 stores an
+    account as a local part plus a domain reference; the generator was
+    passing v0.15's full address and the server rejected it ("Invalid email
+    local part"). The smoke instance used bare usernames and never
+    exercised it. Fixed - and because local parts are unique only within a
+    domain, an ambiguous one is now refused with a warning rather than
+    risking Admin landing on the wrong account.
+  - **A failed apply leaves the store in bootstrap mode.** After a partial
+    apply the instance answers every management call with "The server is in
+    bootstrap mode. Only the 'Bootstrap' object type can be accessed until
+    the bootstrap process is complete." So a half-applied plan is not a
+    partially configured server, it is an unusable one, which raises the
+    stakes on apply failures considerably.
+  - **A config fallback-admin does not survive the migration.** v0.16's
+    config is a store pointer, so an `[authentication.fallback-admin]`
+    block in the old config.toml simply ceases to exist. The credentials an
+    operator supplies for the pre-migration instance therefore stop working
+    on the migrated one, and cutover's health check - which authenticated -
+    failed a cutover that had actually succeeded. Liveness and credentials
+    are now separate questions: any response proves the service is up, and
+    credentials that no longer work are a warning naming this cause.
+  - `tenant-admin` has no v0.16 equivalent and is reported as unrestorable
+    rather than silently dropped.
+
 - **`rehearse` (§4.9) is designed but not built.** The command is still
   `run --dry-run` with the old sandbox-cloning shape. Building it is mostly
   deletion: the dump, convert and report pieces already exist and work
