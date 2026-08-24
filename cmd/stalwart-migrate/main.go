@@ -27,6 +27,8 @@ func main() {
 		err = runRehearse(os.Args[2:])
 	case "run":
 		err = runRun(os.Args[2:])
+	case "tenants":
+		err = runTenants(os.Args[2:])
 	case "status":
 		err = runStatus(os.Args[2:])
 	case "report":
@@ -49,6 +51,7 @@ commands:
   preflight   run read-only checks and print the migration plan
   rehearse    convert this instance's settings and report what will NOT carry over (read-only)
   run         perform the migration (needs --yes and --recovery-point-confirmed)
+  tenants     show which tenant owns which domain, and what blocks a migration (read-only)
   status      show the state of an in-progress or completed run
   report      print the validation report for a run`)
 }
