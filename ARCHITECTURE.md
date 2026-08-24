@@ -599,6 +599,31 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   script is Stalwart's, not ours — need a policy for what happens when it
   changes upstream (re-vendor + re-test before bumping the pin, never
   silently float to `main`).
+- **Most of the "unmigrated" settings are not work at all - measured, then
+  classified.** The raw figure from a production instance was 12,182
+  settings, which reads as an impossible amount of manual reconstruction.
+  Snapshotting a migrated v0.16.14 store showed why it is misleading:
+  8,547 of them are `server.blocked-ip`, runtime auto-ban state that
+  repopulates itself; 3,337 are stock spam-filter and lookup data v0.16
+  ships its own copies of (2,084 `MemoryLookupKey`, 66 `SpamRule`, 18
+  `SpamDnsblServer` were already present after migration); ~224 had already
+  been carried by another route, DKIM included, as `DkimSignature` objects
+  with their private keys. That leaves **~293 keys genuinely needing a
+  human**.
+
+  `backup.UnmigratedReport.Classify` encodes this, and the rehearsal reports
+  the categorised view rather than the raw count. Every rule was checked
+  against a migrated instance rather than inferred, and an unrecognized
+  prefix defaults to "needs review" - assuming an unknown setting is safe to
+  ignore is the wrong default.
+
+  This also retired a planned pair of generators. v0.15's spam rules are
+  `stwt_rbl_senderscore_ip`; v0.16's are `STWT_RBL_SENDERSCORE_IP` - the
+  same stock set, already installed. Generating them from v0.15 would
+  duplicate every rule and revert a year of upstream updates, so the
+  lookup and spam-filter generators were deliberately not written. The
+  targets worth generating are the small site-specific groups:
+  `queue.schedule`, `queue.tls`, `session.auth`, `server.auto-ban`.
 - **Settings apply-plan (§4.3): started, and the critical path.**
   `internal/applyplan` covers `server.listener` — verified end to end by
   applying a generated plan to a real 0.16.14 instance and reading back all

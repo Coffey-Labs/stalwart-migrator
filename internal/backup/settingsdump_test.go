@@ -262,3 +262,118 @@ func TestRunSettingsConvertRunsInTheGivenWorkDir(t *testing.T) {
 		t.Errorf("unmigrated.txt should land in WorkDir, not the caller's cwd: %v", err)
 	}
 }
+
+// The numbers here are the real ones from a production instance, because
+// the point of classifying is what it does to those numbers: 12,182 reads
+// as impossible, and is mostly nothing to do.
+const productionUnmigrated = `# Unmigrated v0.15 settings
+
+Total unmigrated keys: 12182 across 69 prefixes.
+
+  server.blocked-ip                     8547 keys
+  lookup.url-redirectors                1076 keys
+  lookup.trusted-domains                 828 keys
+  spam-filter.list                       537 keys
+  spam-filter.rule                       424 keys
+  spam-filter.dnsbl                      292 keys
+  lookup.surbl-hashbl                    180 keys
+  queue.schedule                          41 keys
+  server.listener                         26 keys
+  signature.rsa-example.com               22 keys
+  server.auto-ban                         16 keys
+  session.auth                            14 keys
+`
+
+func classifyProduction(t *testing.T) *ClassifiedReport {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "unmigrated.txt")
+	if err := os.WriteFile(path, []byte(productionUnmigrated), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ReadUnmigratedReport(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report.Classify()
+}
+
+func TestClassifySeparatesWorkFromNoise(t *testing.T) {
+	c := classifyProduction(t)
+
+	// Runtime state: auto-ban repopulates it.
+	if got := c.Counts[DispositionRegenerates]; got != 8547 {
+		t.Errorf("regenerates = %d, want 8547 (server.blocked-ip)", got)
+	}
+	// Stock data v0.16 ships: restoring v0.15's would revert it.
+	if got := c.Counts[DispositionShipped]; got != 1076+828+537+424+292+180 {
+		t.Errorf("shipped = %d, want the stock spam/lookup groups", got)
+	}
+	// Carried by another route.
+	if got := c.Counts[DispositionCarried]; got != 22+26 {
+		t.Errorf("carried = %d, want the signature and listener groups", got)
+	}
+	// What's actually left for a human.
+	if got := c.Counts[DispositionReview]; got != 41+16+14 {
+		t.Errorf("needs review = %d, want %d", got, 41+16+14)
+	}
+}
+
+// server.blocked-ip is runtime state; server.auto-ban sitting right next to
+// it is configuration. A shortest-prefix match would get this wrong.
+func TestClassifyPrefersTheMoreSpecificRule(t *testing.T) {
+	c := classifyProduction(t)
+	for _, g := range c.Groups {
+		switch g.Prefix {
+		case "server.blocked-ip":
+			if g.Disposition != DispositionRegenerates {
+				t.Errorf("server.blocked-ip = %q, want regenerates", g.Disposition)
+			}
+		case "server.auto-ban":
+			if g.Disposition != DispositionReview {
+				t.Errorf("server.auto-ban = %q, want review - it is configuration, not runtime state", g.Disposition)
+			}
+		case "server.listener":
+			if g.Disposition != DispositionCarried {
+				t.Errorf("server.listener = %q, want carried - the apply plan regenerates it", g.Disposition)
+			}
+		}
+	}
+}
+
+func TestClassifyReviewListIsTheActualWorklist(t *testing.T) {
+	review := classifyProduction(t).NeedsReview()
+	if len(review) != 3 {
+		t.Fatalf("review groups = %d, want 3", len(review))
+	}
+	if review[0].Prefix != "queue.schedule" {
+		t.Errorf("first review group = %q, want the largest (queue.schedule)", review[0].Prefix)
+	}
+	for _, g := range review {
+		if g.Disposition != DispositionReview {
+			t.Errorf("%s is in the review list with disposition %q", g.Prefix, g.Disposition)
+		}
+	}
+}
+
+func TestClassifySummaryLeadsWithWhatMatters(t *testing.T) {
+	summary := classifyProduction(t).Summary("/var/lib/stalwart-migrator/runs/x/unmigrated.txt")
+	if !strings.Contains(summary, "NEED YOUR REVIEW") {
+		t.Errorf("summary should call out the review bucket:\n%s", summary)
+	}
+	if !strings.Contains(summary, "71 needing review are work") {
+		t.Errorf("summary should say how much is actually work:\n%s", summary)
+	}
+	if !strings.Contains(summary, "would revert them") {
+		t.Errorf("summary should warn against restoring stock data:\n%s", summary)
+	}
+}
+
+func TestClassifyUnknownPrefixesDefaultToReview(t *testing.T) {
+	d, note := classifyPrefix("something.nobody.has.seen")
+	if d != DispositionReview {
+		t.Errorf("unknown prefix = %q, want review - guessing that an unknown setting is safe to ignore is the wrong default", d)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want empty for an unclassified prefix", note)
+	}
+}

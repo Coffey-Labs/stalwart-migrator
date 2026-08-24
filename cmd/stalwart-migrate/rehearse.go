@@ -212,9 +212,10 @@ func runRehearse(args []string) (err error) {
 				rs.RecordArtifact("unmigrated-settings", checkpoint.Artifact{Path: keptWorklist, SHA256: sum, SizeBytes: size})
 			}
 		}
-		fmt.Printf("\n  !! %s\n", unmigrated.Summary(10))
-		fmt.Println("     These do not carry over on their own. See the supplemental plan below for the part")
-		fmt.Println("     this tool can rebuild for you.")
+		// Categorised rather than counted: the raw total is alarming and
+		// misleading. Most of it either rebuilds itself or ships with
+		// v0.16 - see backup.Disposition.
+		fmt.Printf("\n  !! %s\n", unmigrated.Classify().Summary(keptWorklist))
 	}
 
 	// Generate what we can of the gap (ARCHITECTURE.md §4.3). This is

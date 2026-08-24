@@ -124,10 +124,18 @@ stalwart-cli apply --file <state-dir>/runs/<run-id>/supplement.json \
     --url https://mail.example.com
 ```
 
-Expect the worklist to be long. Measured against a real production instance,
-`migrate_v016.py` carried **219 of 12,401 settings — 1.8%**. The rest,
-including `server.listener`, has to be rebuilt by hand; until it is, a
-migrated instance answers on no ports at all. Both outputs are preserved
+The worklist is long but mostly not work, and `rehearse` says which is
+which. Measured against a real production instance, `migrate_v016.py`
+carried **219 of 12,401 settings**. Of the 12,182 it left:
+
+- **8,547** are runtime auto-ban state that repopulates itself
+- **3,337** are stock spam-filter and lookup data v0.16 ships its own copies
+  of — restoring v0.15's would revert a year of upstream updates
+- **~224** were already carried another way, DKIM signatures included
+- **~293** genuinely need your eyes
+
+`server.listener` is in that third group only because this tool regenerates
+it for you; without that a migrated instance answers on no ports at all. Both outputs are preserved
 under `<state-dir>/runs/<run-id>/` (`export.json` and `unmigrated.txt`) even
 though the rest of the scratch directory is cleaned up, because they are the
 conclusions.
