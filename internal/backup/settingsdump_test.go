@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -377,3 +378,56 @@ func TestClassifyUnknownPrefixesDefaultToReview(t *testing.T) {
 		t.Errorf("note = %q, want empty for an unclassified prefix", note)
 	}
 }
+
+// A host with no route to the internet - an air-gapped server, or a clone cut
+// off so it cannot renew certificates or deliver queued mail for the domains
+// it was copied from - cannot fetch the migration script, and without a local
+// copy could not be migrated at all.
+func TestProvideFileUsesALocalCopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "migrate_v016.py")
+	if err := os.WriteFile(src, []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out.py")
+
+	// A client that would fail loudly if it were used.
+	refuse := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("network must not be touched when a local copy was given")
+	})}
+
+	sum, err := ProvideFile(context.Background(), refuse, src, DefaultMigrationScriptURL, dest, "")
+	if err != nil {
+		t.Fatalf("ProvideFile: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || string(got) != "print('hello')\n" {
+		t.Fatalf("dest = %q, %v", got, err)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte("print('hello')\n"))); sum != want {
+		t.Fatalf("sha256 = %s, want %s", sum, want)
+	}
+}
+
+func TestProvideFileChecksThePinnedHash(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "migrate_v016.py")
+	if err := os.WriteFile(src, []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ProvideFile(context.Background(), nil, src, DefaultMigrationScriptURL, filepath.Join(dir, "out.py"), "deadbeef")
+	if err == nil {
+		t.Fatal("a local copy must still be checked against a pinned hash")
+	}
+}
+
+func TestProvideFileReportsAMissingLocalCopy(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ProvideFile(context.Background(), nil, filepath.Join(dir, "nope.py"), DefaultMigrationScriptURL, filepath.Join(dir, "out.py"), ""); err == nil {
+		t.Fatal("expected an error for a local copy that is not there")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

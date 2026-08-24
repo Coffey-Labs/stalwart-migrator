@@ -55,6 +55,7 @@ func runRehearse(args []string) (err error) {
 	stalwartCLI := fs.String("stalwart-cli", "stalwart-cli",
 		"path to stalwart-cli (v1.0.2 or later; a separate download from the server) - rehearsal doesn't invoke it, but checks it so `run` doesn't fail after stopping the service")
 	migrationScriptSHA256 := fs.String("migration-script-sha256", "", "pinned sha256 of migrate_v016.py (recommended; the first run prints the hash to pin)")
+	migrationScriptPath := fs.String("migration-script", "", "use a local copy of migrate_v016.py instead of fetching it (for a host with no route to the internet)")
 	minFree := fs.Float64("min-free-multiple", 2.0, "free-space multiple preflight checks for; rehearsal itself copies nothing")
 	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward")
 	if err := fs.Parse(args); err != nil {
@@ -146,7 +147,7 @@ func runRehearse(args []string) (err error) {
 		if err := os.MkdirAll(runWorkDir, 0o750); err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		sum, err := backup.DownloadFile(ctx, httpClient, backup.DefaultMigrationScriptURL, scriptDest, *migrationScriptSHA256)
+		sum, err := backup.ProvideFile(ctx, httpClient, *migrationScriptPath, backup.DefaultMigrationScriptURL, scriptDest, *migrationScriptSHA256)
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}

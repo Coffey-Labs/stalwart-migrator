@@ -66,6 +66,7 @@ func runRun(args []string) (err error) {
 	pythonPath := fs.String("python", "python3", "path to python3")
 	stalwartCLI := fs.String("stalwart-cli", "stalwart-cli", "path to stalwart-cli (v1.0.2 or later; a separate download from the server)")
 	scriptSHA := fs.String("migration-script-sha256", "", "pinned sha256 of migrate_v016.py")
+	scriptPath := fs.String("migration-script", "", "use a local copy of migrate_v016.py instead of fetching it (for a host with no route to the internet)")
 	binarySHA := fs.String("target-binary-sha256", "", "pinned sha256 of the target release archive")
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	recalcQuotas := fs.Bool("recalculate-quotas", true, "schedule the post-migration quota rebuild")
@@ -196,7 +197,7 @@ func runRun(args []string) (err error) {
 	if p.CrossesMajorBoundary {
 		fmt.Println("\n--- dump (service still up) ---")
 		if _, err := store.RunStep(rs, checkpoint.PhaseBackup, "settings-dump", func() (checkpoint.StepOutcome, error) {
-			if _, err := backup.DownloadFile(ctx, httpClient, backup.DefaultMigrationScriptURL, script, *scriptSHA); err != nil {
+			if _, err := backup.ProvideFile(ctx, httpClient, *scriptPath, backup.DefaultMigrationScriptURL, script, *scriptSHA); err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
 			if err := backup.RunSettingsDump(ctx, backup.SettingsDumpOptions{

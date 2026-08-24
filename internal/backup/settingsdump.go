@@ -26,6 +26,32 @@ import (
 // pinning discussion on DownloadFile and ARCHITECTURE.md §8.
 const DefaultMigrationScriptURL = "https://raw.githubusercontent.com/stalwartlabs/stalwart/main/resources/scripts/migrate_v016.py"
 
+// ProvideFile puts the migration script at destPath, from srcPath when one
+// is given and from url otherwise, and returns its SHA256.
+//
+// A local copy is not only a convenience for testing. A mail server with no
+// route to the internet - an air-gapped host, or a clone deliberately cut
+// off so it cannot renew certificates or deliver queued mail for the domains
+// it was copied from - cannot fetch anything, and could not be migrated at
+// all without this.
+func ProvideFile(ctx context.Context, httpClient *http.Client, srcPath, url, destPath, expectedSHA256 string) (sha256Hex string, err error) {
+	if srcPath == "" {
+		return DownloadFile(ctx, httpClient, url, destPath, expectedSHA256)
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("backup: read %s: %w", srcPath, err)
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(data))
+	if expectedSHA256 != "" && !strings.EqualFold(sum, expectedSHA256) {
+		return "", fmt.Errorf("backup: %s has sha256 %s, expected %s", srcPath, sum, expectedSHA256)
+	}
+	if err := os.WriteFile(destPath, data, 0o640); err != nil {
+		return "", fmt.Errorf("backup: write %s: %w", destPath, err)
+	}
+	return sum, nil
+}
+
 // DownloadFile fetches url to destPath and returns its SHA256. If
 // expectedSHA256 is non-empty, a mismatching download is rejected (and the
 // partial file removed) - this is how a pinned migration-script hash is
