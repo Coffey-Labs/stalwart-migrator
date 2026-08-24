@@ -18,15 +18,19 @@ import (
 // Options configures a Checker. Every field has a conservative default
 // applied by New except the ones that must name a real path on this host.
 type Options struct {
-	BinaryPath      string // installed stalwart binary, e.g. /usr/local/bin/stalwart
-	ConfigPath      string // its config file (TOML pre-0.16, JSON 0.16+)
-	DataDir         string // data directory to size/space-check
-	ContainerName   string // docker container name, if applicable
-	AdminURL        string // base URL for the JMAP reachability check; empty skips it
-	AdminUser       string
-	AdminPassword   string
-	TargetVersion   string // e.g. "0.16.14" or "latest"
-	MinFreeMultiple float64
+	BinaryPath    string // installed stalwart binary, e.g. /usr/local/bin/stalwart
+	ConfigPath    string // its config file (TOML pre-0.16, JSON 0.16+)
+	DataDir       string // data directory to size/space-check
+	ContainerName string // docker container name, if applicable
+	AdminURL      string // base URL for the JMAP reachability check; empty skips it
+	AdminUser     string
+	AdminPassword string
+	TargetVersion string // e.g. "0.16.14" or "latest"
+	// TargetBinaryPath, when set, is read for the target version instead of
+	// asking the release API - the only way a host with no route out can
+	// pass this check.
+	TargetBinaryPath string
+	MinFreeMultiple  float64
 	// CLIPath and PythonPath are the external programs the migration
 	// shells out to. Checked before anything is touched - see
 	// CheckExternalTools.
@@ -103,6 +107,24 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 	}
 
 	targetOutcome, err := runCheck("target-release", func() (CheckResult, string) {
+		// A binary already on disk answers the question the release API was
+		// being asked - which version are we upgrading to - without needing
+		// a route to the internet. A host that has none cannot reach the
+		// API at all, and failing here would stop it migrating even though
+		// everything it needs is present.
+		if c.opts.TargetBinaryPath != "" {
+			got, err := DetectVersion(ctx, c.opts.TargetBinaryPath)
+			if err != nil {
+				return CheckResult{Status: StatusFail, Detail: fmt.Sprintf("couldn't read the version of %s: %v", c.opts.TargetBinaryPath, err)}, ""
+			}
+			want := strings.TrimPrefix(c.opts.TargetVersion, "v")
+			if want != "" && want != "latest" && want != got {
+				return CheckResult{Status: StatusFail, Detail: fmt.Sprintf(
+					"%s reports version %s, but this run targets %s - migrating to a version nobody planned for",
+					c.opts.TargetBinaryPath, got, want)}, ""
+			}
+			return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("target is %s, taken from %s (no release lookup needed)", got, c.opts.TargetBinaryPath)}, got
+		}
 		rel, err := ResolveRelease(ctx, c.opts.HTTPClient, c.opts.TargetVersion)
 		if err != nil {
 			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""

@@ -157,7 +157,7 @@ func runRun(args []string) (err error) {
 	pfReport, err := preflight.New(preflight.Options{
 		BinaryPath: *binaryPath, ConfigPath: *configPath, DataDir: *dataDir, ContainerName: *containerName,
 		AdminURL: *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
-		TargetVersion: *targetVersion, MinFreeMultiple: *minFree, HTTPClient: httpClient,
+		TargetVersion: *targetVersion, TargetBinaryPath: *targetBinary, MinFreeMultiple: *minFree, HTTPClient: httpClient,
 		CLIPath: *stalwartCLI, PythonPath: *pythonPath,
 	}).Run(ctx, store, rs)
 	fmt.Print(pfReport.String())

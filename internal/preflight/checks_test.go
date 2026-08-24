@@ -329,3 +329,83 @@ func TestCheckerRunCapturesAccountSnapshotWhenAdminURLSet(t *testing.T) {
 		t.Errorf("resumed PreflightSnapshot = %+v, want AccountCount 1", resumed.PreflightSnapshot)
 	}
 }
+
+// A host with no route to the internet cannot reach the release API, and
+// failing there would stop it migrating even though the binary it needs is
+// already on disk. The binary itself answers the question.
+func TestTargetReleaseReadsALocalBinaryInsteadOfTheAPI(t *testing.T) {
+	fakeTool(t, "stalwart-cli", "stalwart-cli 1.0.12")
+	fakeTool(t, "python3", "Python 3.13.5")
+	counter := filepath.Join(t.TempDir(), "invocations")
+	current := writeFakeBinary(t, "0.15.5", counter)
+	target := writeFakeBinary(t, "0.16.19", counter)
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[store.\"rocksdb\"]\ntype = \"rocksdb\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+
+	// Point the release API at a listener that fails the test if used.
+	withFakeGithub(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the release API must not be consulted when a local target binary was given (%s)", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	store := checkpoint.NewStore(t.TempDir())
+	rs, err := store.Create("", "0.16.19")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := New(Options{
+		BinaryPath: current, ConfigPath: configPath, DataDir: dataDir,
+		TargetVersion: "0.16.19", TargetBinaryPath: target, MinFreeMultiple: 0.0001,
+	}).Run(context.Background(), store, rs)
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	var found *CheckResult
+	for i := range report.Results {
+		if report.Results[i].Name == "target-release" {
+			found = &report.Results[i]
+		}
+	}
+	if found == nil || found.Status != StatusOK {
+		t.Fatalf("target-release = %+v, want OK without touching the network\n%s", found, report.String())
+	}
+	if !strings.Contains(found.Detail, "0.16.19") {
+		t.Fatalf("detail should name the version it read, got %q", found.Detail)
+	}
+}
+
+func TestTargetReleaseRejectsAMismatchedLocalBinary(t *testing.T) {
+	fakeTool(t, "stalwart-cli", "stalwart-cli 1.0.12")
+	fakeTool(t, "python3", "Python 3.13.5")
+	counter := filepath.Join(t.TempDir(), "invocations")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[store.\"rocksdb\"]\ntype = \"rocksdb\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withFakeGithub(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	store := checkpoint.NewStore(t.TempDir())
+	rs, err := store.Create("", "0.16.19")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := New(Options{
+		BinaryPath: writeFakeBinary(t, "0.15.5", counter), ConfigPath: configPath, DataDir: t.TempDir(),
+		TargetVersion: "0.16.19", TargetBinaryPath: writeFakeBinary(t, "0.16.14", counter), MinFreeMultiple: 0.0001,
+	}).Run(context.Background(), store, rs)
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	for _, r := range report.Results {
+		if r.Name == "target-release" {
+			if r.Status != StatusFail {
+				t.Fatalf("target-release = %+v, want FAIL for a binary that is not the target", r)
+			}
+			return
+		}
+	}
+	t.Fatal("no target-release check in the report")
+}

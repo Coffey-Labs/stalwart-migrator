@@ -24,6 +24,7 @@ func runPreflight(args []string) error {
 	adminPassword := fs.String("admin-password", os.Getenv("STALWART_MIGRATE_ADMIN_PASSWORD"),
 		"admin password for the reachability check (or set STALWART_MIGRATE_ADMIN_PASSWORD)")
 	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
+	targetBinary := fs.String("target-binary", "", "read the target version from this already-downloaded binary instead of the release API (for a host with no route to the internet)")
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")
 	pythonPath := fs.String("python", "python3", "path to python3, needed by migrate_v016.py")
@@ -39,17 +40,18 @@ func runPreflight(args []string) error {
 	}
 
 	checker := preflight.New(preflight.Options{
-		BinaryPath:      *binaryPath,
-		ConfigPath:      *configPath,
-		DataDir:         *dataDir,
-		ContainerName:   *containerName,
-		AdminURL:        *adminURL,
-		AdminUser:       *adminUser,
-		AdminPassword:   *adminPassword,
-		TargetVersion:   *targetVersion,
-		MinFreeMultiple: *minFree,
-		CLIPath:         *stalwartCLI,
-		PythonPath:      *pythonPath,
+		BinaryPath:       *binaryPath,
+		ConfigPath:       *configPath,
+		DataDir:          *dataDir,
+		ContainerName:    *containerName,
+		AdminURL:         *adminURL,
+		AdminUser:        *adminUser,
+		AdminPassword:    *adminPassword,
+		TargetVersion:    *targetVersion,
+		TargetBinaryPath: *targetBinary,
+		MinFreeMultiple:  *minFree,
+		CLIPath:          *stalwartCLI,
+		PythonPath:       *pythonPath,
 	})
 
 	report, err := checker.Run(context.Background(), store, rs)
