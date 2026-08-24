@@ -19,17 +19,20 @@ them into a production run yet, so `run` still refuses.
 | Command | State |
 |---|---|
 | `stalwart-migrate preflight` | **Works** — read-only checks and a migration plan |
-| `stalwart-migrate run --dry-run` | **Works** — preflight, real backup, sandboxed trial conversion |
+| `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
 | `stalwart-migrate run` | **Refuses on purpose** — see below |
 | `stalwart-migrate status <id>` | **Works** |
 | `stalwart-migrate report <id>` | Not implemented |
 
-**`run` without `--dry-run` deliberately refuses to proceed.** Cutover
-(ARCHITECTURE.md §4.5) is implemented and tested, but nothing calls it: the
-staging phase (§4.3) and the production pipeline that would run preflight →
-backup → stage → recovery-mode → cutover → validate against real paths don't
-exist yet. `run` stops rather than going partway. That refusal is the correct
-behaviour today, not a bug.
+**`run` deliberately refuses to proceed.** Cutover (ARCHITECTURE.md §4.5) is
+implemented, but nothing calls it: the staging phase (§4.3) and the pipeline
+that would run preflight → backup → stage → recovery-mode → cutover →
+validate against real paths don't exist yet. `run` stops rather than going
+partway. That refusal is the correct behaviour today, not a bug.
+
+**Start with `rehearse` instead.** It is read-only, needs no maintenance
+window, and answers the question that actually shapes a migration plan —
+see below.
 
 Package state:
 
@@ -91,11 +94,36 @@ pre-created writable `/var/lib/stalwart-migrator`. (`run` takes `--work-dir`
 for its scratch space, but that is a different directory and does not move
 the checkpoint store.)
 
-`run --dry-run` performs a **real backup**, which touches the live data
-directory — read the caveat the command prints before using it on anything
-you care about. Where the plan crosses the 0.15/0.16 boundary it clones that
-verified backup into a disposable sandbox and converts the copy, leaving the
-original untouched.
+`rehearse` is the next step, and unlike everything else here it is worth
+running today — see the next section.
+
+## Rehearse before you migrate
+
+```sh
+stalwart-migrate rehearse --admin-url https://mail.example.com \
+    --admin-user admin --target 0.16.14
+```
+
+It runs preflight, dumps your settings and principals, converts them with
+Stalwart's own `migrate_v016.py`, and reports **both halves** of the result:
+the apply plan of what will carry over, and the worklist of what will not.
+
+It copies no data, clones nothing, starts no server, and never writes to the
+store, so it is safe to run against production repeatedly and without a
+maintenance window.
+
+Expect the worklist to be long. Measured against a real production instance,
+`migrate_v016.py` carried **219 of 12,401 settings — 1.8%**. The rest,
+including `server.listener`, has to be rebuilt by hand; until it is, a
+migrated instance answers on no ports at all. Both outputs are preserved
+under `<state-dir>/runs/<run-id>/` (`export.json` and `unmigrated.txt`) even
+though the rest of the scratch directory is cleaned up, because they are the
+conclusions.
+
+This replaced an earlier `run --dry-run` that cloned the data directory into
+a sandbox and migrated the copy. That proved the store opens, at the cost of
+copying it twice — while the half that found every real problem needed no
+copy at all. ARCHITECTURE.md §4.9 has the reasoning.
 
 ## Recovery is your job
 

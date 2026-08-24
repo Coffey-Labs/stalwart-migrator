@@ -90,7 +90,7 @@ smoke test, not a full migration.
  ┌─────────────┐   ┌───────────┐   ┌────────────┐   ┌───────────────┐   ┌────────────┐   ┌────────────┐
  │  PREFLIGHT  │──▶│  BACKUP   │──▶│ STAGE NEW  │──▶│ RECOVERY-MODE │──▶│  CUTOVER   │──▶│  VALIDATE  │
  │  (checks,   │   │ (defense  │   │  BINARY +  │   │   MIGRATE     │   │ (swap, up, │   │ (functional│
- │  dry-run)   │   │ in depth) │   │  config    │   │ (apply plan)  │   │  smoke)    │   │  + counts) │
+ │  rehearse)  │   │ in depth) │   │  config    │   │ (apply plan)  │   │  smoke)    │   │  + counts) │
  └─────────────┘   └───────────┘   └────────────┘   └───────────────┘   └────────────┘   └────────────┘
         │                 │                │                 │                 │                │
         └─────────────────┴────────────────┴─── on failure ──┴─────────────────┴──▶  STOP + REPORT
@@ -197,9 +197,17 @@ pre-migration instance is still up, rather than after it isn't.
   rules, auth backend config — by diffing the old effective config against
   the new schema and emitting a best-effort JMAP object set for
   `stalwart-cli apply`. This is flagged clearly as best-effort and included
-  in the final report for manual review; it's the one part of the
-  documented procedure that's explicitly manual today, and silently getting
-  it wrong (rather than flagging it) would be worse than not attempting it.
+  in the final report for manual review; silently getting it wrong (rather
+  than flagging it) would be worse than not attempting it.
+
+  **This is no longer an optional enhancement.** Measured against a real
+  production instance, `migrate_v016.py` migrated 219 of 12,401 settings —
+  1.8% — leaving 12,182 for the operator to recreate by hand, including
+  `server.listener`. A migrated instance therefore serves nothing until
+  somebody rebuilds its listeners, whatever else went right. Something has
+  to generate that plan; the only question is whether it is this tool,
+  reviewably, or a human under time pressure during a cutover window.
+  `unmigrated.txt` (§4.9) is the input it should be built from.
 - Stage new systemd unit / Compose file changes without activating them.
 
 ### 4.4 Recovery-mode migration
@@ -295,6 +303,21 @@ code path, so it doesn't rot independently.
 
 ### 4.7 Post-migration validation
 
+**What this suite can assert depends on the boundary being crossed, and on
+the 0.15/0.16 boundary it is less than this section originally claimed.**
+Stalwart 0.15.x reports no per-mailbox message counts at any endpoint, and
+the impersonation login 0.16 offers returns 401 there, so there are no
+"before" counts to compare against — the before/after message-count
+comparison is simply unavailable for the migration this tool exists to
+perform. Both versions report per-account used quota, which is captured on
+both sides, but §4.5 notes the migration resets quotas to zero pending
+recalculation, so it is recorded rather than asserted on. What remains
+checkable across the boundary is that every account and every domain
+survived, and the reports say so in those words rather than implying a
+no-data-loss guarantee that was not measured. See
+`internal/validate/content_integrity.go`.
+
+
 Runs automatically after cutover; failure here stops the run, reports
 loudly, and exits non-zero, leaving the operator to decide what to restore
 (§4.8).
@@ -389,66 +412,78 @@ the run and reports, and a human decides what to restore. Both are
 deliberate trades for not shipping a recovery path that has never been
 tested against a real server.
 
-### 4.9 Dry run
+### 4.9 Rehearsal (was: dry run)
 
-`stalwart-migrate run --dry-run` runs the real migration mechanics against a
-disposable sandbox clone of the data, so an operator can get genuine
-confidence *before* committing to a real cutover — not a simulation that
-skips the fragile parts, the actual recovery-mode migration (§4.4) and a
-post-migration boot check, just pointed somewhere disposable:
+**This section was rewritten after running the previous design against a
+real 0.15.5 instance and a real production settings corpus. What it found
+inverted the design's assumptions, so the reasoning is recorded here rather
+than quietly replaced.**
 
-1. **Preflight** (§4.1) runs for real, read-only, against the live instance.
-2. **Backup** (§4.2) runs for real too, with one exception:
-   `SkipBinaryPreservation` is set, so the production binary at the real
-   install path is never moved aside. Taking a *consistent* filesystem
-   snapshot of an embedded store still means the live service should be
-   stopped first (the same requirement Stalwart's own export tooling has) —
-   this tool doesn't automate that stop/start today (no systemd/Docker
-   control exists yet), so a dry-run without a manual stop first is a
-   best-effort snapshot of a live, in-use store, and the CLI says so.
-3. **Convert**: `migrate_v016.py convert` turns the settings/principals dump
-   into `config.json` + `export.json`, using the script's own documented
-   `--patch-paths <old>=<new>` flag to point the generated config at the
-   sandbox data directory instead of the real one. This is the officially
-   documented mechanism for exactly this kind of path redirection — the tool
-   deliberately does not try to rewrite `config.json`'s contents itself,
-   since depending on its exact schema (which has already changed once,
-   0.15 → 0.16) is a correctness risk this tool avoids wherever an official
-   alternative exists.
-4. The verified backup copy is cloned again into the sandbox directory
-   (never reusing the same directory recovery mode is about to mutate as the
-   one a manual restore would use).
-5. **Recovery-mode migration** (§4.4) runs for real against the sandbox:
-   the actual target binary, actual `STALWART_RECOVERY_MODE=1` boot, actual
-   `stalwart-cli apply`.
-6. **Boot check + content integrity**: the migrated sandbox is started once
-   more as an ordinary boot (no recovery-mode env vars) and polled until its
-   HTTP listener answers, confirming the migrated store doesn't just accept
-   a settings apply but actually comes up cleanly afterward. If preflight
-   captured a pre-migration snapshot (§4.1, requires `--admin-url`), the
-   same boot is then used to capture a fresh post-migration snapshot and
-   compare the two — this is the actual no-data-loss guarantee, not just
-   "the mechanics ran": every account and mailbox from before must still be
-   found afterward (matching by exact name, falling back to the part before
-   `@` since v0.16's own migration rewrites bare usernames to full email
-   addresses) with an identical message count. A mismatch or a missing
-   account fails the check. This covers the message-count half of §4.7's
-   full suite; DKIM/TLS fingerprint checks and a live mail-flow SMTP→IMAP
-   smoke test are still open.
-7. Every byte written by steps 2–6 (the fs-backup copy, settings/principals
-   dumps, downloaded `migrate_v016.py`, sandbox clone, and generated
-   `config.json`/`export.json`) lives under one per-run directory
-   (`work-dir/<run-id>`), which is removed on *every* exit path - success,
-   a failed check partway through, or an early refusal - via a deferred
-   cleanup, not just the happy path. The only thing left behind afterward
-   is the checkpoint's `state.json` under `--state-dir`: a small structured
-   success/failure log (which check failed and why), not bulk data.
-   `--keep-artifacts` opts out for inspecting a failure. Nothing at the real
-   binary path, the real service, or the real data directory's *contents*
-   is ever mutated by steps 2–6 in the first place.
+The original dry run existed to answer *"will the migration mechanics
+work?"* — it cloned the data, ran the real recovery-mode migration against
+the clone, booted the result, and compared content before and after. Three
+findings retire that design:
 
-A same-boundary patch bump (§4.6) has no recovery phase to simulate — dry
-run for that plan is just preflight + backup.
+1. **The mechanics were never the risk.** Backup, settings dump, convert
+   and the recovery-mode store migration all worked essentially first time
+   against real software. The failures were everywhere else.
+2. **The final comparison cannot work, at all.** It needs the migrated
+   sandbox to answer an API. `server.listener` is not among the settings
+   `migrate_v016.py` migrates, so a migrated instance has no listeners and
+   answers on nothing. That is not a sandbox artifact to engineer around —
+   it is the true post-migration state.
+3. **The expensive half buys the least.** Against a 3.6 GB production store
+   the old flow copies the data twice (backup + sandbox clone, ~11 GB and a
+   long wait) while reading a live mail store, to prove that RocksDB files
+   copy correctly and that recovery mode can open them. Real, but modest.
+
+Meanwhile the cheap half — dump, convert, and report what did *not* convert
+— is what caught every problem that would have derailed a real migration:
+an empty `defaultHostname` that v0.16 rejects, accounts whose passwords
+v0.16 refuses to create, and a reconstruction worklist of 12,182 settings.
+It needs no data copy at all.
+
+So the phase reduces to the half that earns its cost:
+
+**`stalwart-migrate rehearse`.** Run preflight (§4.1, read-only), dump
+settings and principals from the live instance, run `migrate_v016.py
+convert`, and report:
+
+- the generated `export.json` plan (what *will* carry over), and
+- `unmigrated.txt` (what will *not*, grouped and counted — see §4.3).
+
+That is the whole phase. It copies no data, clones nothing, starts no
+server, and never writes to the store — so it is safe to run against
+production repeatedly, early and often, without a maintenance window. It
+answers the question that actually decides a migration plan: *what will I
+have to rebuild by hand, and does my configuration convert at all?*
+
+The sandbox is gone. Cloning the store to run a migration against the copy
+proved only that the store migrates and opens — which is worth something,
+but not the disk and the wait, and not the risk of reading a live store to
+get it. Where that assurance is wanted, rehearse the whole thing on a
+throwaway VM restored from a backup, which is what the smoke environment
+already does and does better.
+
+Consequences worth stating, since they make this phase much cheaper than
+its predecessor:
+
+- **No target binary is needed.** `convert` is pure Python; nothing in
+  this phase executes a Stalwart binary of either version.
+- **No disk headroom is needed.** Nothing is copied. Preflight's
+  free-space check still runs, but it is anticipating the backup a real
+  `run` will take, not anything rehearse does — and it says so.
+- **Rehearsal performs no content-integrity comparison.** §4.7 explains
+  why that is unavailable on this boundary regardless of how it is staged.
+
+Artifacts live under `work-dir/<run-id>` and are removed on every exit path
+unless `--keep-artifacts` is passed — with one deliberate exception.
+`unmigrated.txt` is the operator's reconstruction worklist and is preserved
+and checksummed even on a clean run, because deleting it would throw away
+the most useful output of the whole exercise.
+
+A same-boundary patch bump (§4.6) needs no settings conversion at all, so
+`rehearse` for that plan reports that there is nothing to rehearse.
 
 ## 5. State machine / checkpointing
 
@@ -471,21 +506,22 @@ is the same problem.
 
 ```
 stalwart-migrate preflight   [--config PATH] ...              # read-only, prints the report
-stalwart-migrate run         --dry-run [--target-binary PATH] ...  # implemented — see §4.9
-                              [--keep-artifacts]
-                              (without --dry-run: refused today — see §8)
+stalwart-migrate rehearse    [--keep-artifacts] ...            # read-only; see §4.9
+stalwart-migrate run         (refused today — see §8)
 stalwart-migrate status      [run-id]                          # implemented
 stalwart-migrate report      <run-id>   [--json]                # not yet implemented
 ```
 
-`run` is the only command that mutates anything, and it always starts with
-preflight. Nothing in this tool restores a failed migration (§4.8), so there
+`run` is the only command that mutates anything: `rehearse` reads the live
+instance and writes only inside its own work directory. `run` always starts
+with preflight. Nothing in this tool restores a failed migration (§4.8), so there
 is no `rollback` command, and no `confirm` step to close a rollback window
 that no longer exists.
 
 The migration-time artifacts a run leaves behind — the preserved old binary,
 the settings and principals dumps, the preserved service definition, and
-(for the dry-run path) the filesystem copy — are never pruned automatically.
+and rehearsal's converted plan and unmigrated worklist — are never pruned
+automatically.
 They're small next to the data directory, they're what a manual restore
 reaches for first, and deleting them on a schedule to reclaim disk would be
 the tool making a call that isn't its to make. Flags shown here are the
@@ -512,10 +548,10 @@ stalwart-migrator/
 
 There's no separate `internal/stage` package: the `convert` half of
 `migrate_v016.py` lives in `internal/backup` next to `dump` (same script,
-same invocation pattern), and the dry-run sandbox-cloning logic that stands
-in for the rest of §4.3 currently lives directly in `cmd/run.go` rather than
-its own package. Now that `internal/cutover` exists, that's the code a real
-staging phase would be generalized out of.
+same invocation pattern). The sandbox-cloning logic that used to stand in
+for the rest of §4.3 lived directly in `cmd/run.go` and goes away with the
+sandbox (§4.9); what §4.3 still needs is the apply-plan generator, which
+has no code yet at all.
 
 There's no `internal/rollback` either, and that's a deliberate removal
 rather than a gap — see §4.8.
@@ -541,12 +577,13 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   script is Stalwart's, not ours — need a policy for what happens when it
   changes upstream (re-vendor + re-test before bumping the pin, never
   silently float to `main`).
-- **Best-effort settings apply-plan (§4.3)**: needs real-world testing
-  against a variety of existing SMTP/routing/spam configs before it's
-  trusted un-reviewed; v1 should probably always require operator sign-off
-  on that specific generated plan even with `--yes` set for everything else.
-  Not started — dry-run currently only replays what `migrate_v016.py`
-  itself converts.
+- **Settings apply-plan (§4.3): now the critical path, not an enhancement.**
+  Measured against production, `migrate_v016.py` carries 1.8% of the
+  settings; `server.listener` is not among them, so a migrated instance
+  answers on no ports until the rest is rebuilt. Building this from
+  `unmigrated.txt` is what would make both a meaningful rehearsal and a
+  working cutover possible. It should still require explicit operator
+  sign-off even with `--yes` set for everything else.
 - **Account/mailbox enumeration** (`stalwartapi.Client.AccountSnapshot`):
   **implemented**, including per-mailbox message counts. Account count and
   domains come from `x:Account/query` + `x:Account/get` against Stalwart's
@@ -579,40 +616,43 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   the current released version actually exposes — a reminder that "read the
   source" and "read what's actually shipped" can disagree, and it's worth
   checking both before changing already-working code on the strength of one.
-  Preflight now populates `RunState.PreflightSnapshot.MailboxCounts` when
-  `--admin-url` is set, and `validate.BootCheck` now compares it against a
-  fresh post-migration snapshot as part of the same boot (§4.9 step 6) —
-  proven end-to-end with a live smoke test that deliberately made the
-  "after" instance report fewer messages than the "before" snapshot and
-  confirmed the dry run failed loudly with the exact before/after counts,
-  rather than just trusting that. **Still open**: preflight/validate always
-  attempt every account serially with no sampling/threshold, which could be
-  slow on a large install — `--full-validation`'s sampling idea from §4.7
-  hasn't been built yet for this; and DKIM/TLS fingerprint checks plus a
-  live mail-flow SMTP→IMAP smoke test (the rest of §4.7's suite) aren't
-  implemented. With this done, recovery, backup, dry-run, and account/
-  mailbox snapshotting all work end-to-end, and dry-run's comparison is now
-  the closest thing to §4.7's actual no-data-loss guarantee this tool has —
-  the remaining major gap is §4.3 staging and the production pipeline
-  (below).
+  **Superseded in part.** That mailbox-count comparison was verified only
+  against fabricated fixtures, and against a real 0.15.5 source it does not
+  work at all: 0.15.x reports no per-mailbox counts and refuses the
+  impersonation login, so the "before" side is always empty, and the
+  comparison used to iterate that empty map and report "all message counts
+  match" — a vacuous pass on the strongest claim this tool makes. It now
+  states plainly when counts were not compared (§4.7). Account and domain
+  enumeration against 0.15.x works via its REST principal API.
+  **Still open**: preflight/validate attempt every account serially with no
+  sampling, which could be slow on a large install; and DKIM/TLS
+  fingerprint checks plus a live mail-flow SMTP→IMAP smoke test (the rest
+  of §4.7's suite) aren't implemented.
 - **Cutover is built; nothing wires it into a production run yet.**
   `internal/cutover` (§4.5) and `internal/service` are implemented and
-  tested. `run` without `--dry-run` still refuses, for one remaining
-  reason: **§4.3 stage doesn't exist**, and neither does the production
-  pipeline that would run preflight → backup → stage → recovery-mode →
-  cutover → validate against real paths instead of a sandbox. What stage
-  still needs: downloading and verifying the target binary into a staging
-  path (`preflight.ResolveRelease` and `backup.DownloadFile` between them
-  already have the pieces), running the convert step against real paths
-  rather than the dry-run's patched sandbox ones, and the best-effort
-  settings apply-plan, which is its own open question below.
-- **Nothing has ever run against a real Stalwart.** Every test in this
-  repo drives fake `systemctl`, `psql` and `stalwart` binaries and
-  httptest servers. That's sound for logic and ordering and is not
-  evidence about production. One smoke test on a throwaway VM - real
-  0.15.5, real systemd unit, a few accounts with mail - would settle the
-  quota wire format, systemd drop-in handling, and cutover's unit rewrite
-  at once. It should happen before §4.3 is wired, not after.
+  tested against fakes. `run` still refuses, for one remaining reason:
+  **§4.3 stage doesn't exist**, and neither does the production pipeline
+  that would run preflight → backup → stage → recovery-mode → cutover →
+  validate against real paths. What stage still needs: downloading and
+  verifying the target binary into a staging path
+  (`preflight.ResolveRelease` and `backup.DownloadFile` between them
+  already have the pieces), running convert against real paths, and the
+  settings apply-plan — which, per the measurement above, is what decides
+  whether the migrated server serves anything at all.
+- **What has and hasn't been proven against real software.** A smoke VM
+  (Debian 13, real Stalwart 0.15.5 under a real systemd unit, RocksDB,
+  seeded accounts and mail) has now exercised preflight, backup, the
+  settings dump, `migrate_v016.py` convert, and the recovery-mode store
+  migration end to end - and a scrubbed copy of a production settings
+  corpus has been through the converter. Everything in §4.9's rewrite and
+  most of §8's newer entries came from that, not from reading code.
+
+  Still unproven against real software: **cutover** (never executed - its
+  unit rewrite, service control and quota recalculation are tested only
+  against fakes), the **`x:Task` quota wire format**, **systemd drop-in**
+  handling, and anything on a **non-RocksDB backend** or a **Docker**
+  deployment. Cutover is the gap that matters most, since it is the phase
+  that mutates production.
 - **Quota recalculation is grounded but unproven.** The `x:Task` wire
   format comes from Stalwart's schema reference rather than a live server;
   §4.5 lists exactly which two details are inferred. A smoke test against a
@@ -630,10 +670,18 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   them and refusing.
 - **Nothing prevents concurrent runs.** Two invocations against the same
   run-id would both proceed; there's no lock file or equivalent.
-- **Dry-run's un-stopped backup snapshot** (§4.9 step 2): a dry-run still
-  backs up a live, in-use store unless the operator stops it manually first.
-  `internal/service` now makes doing this properly possible - dry-run just
-  hasn't been wired to offer it yet.
+- **`rehearse` (§4.9) is designed but not built.** The command is still
+  `run --dry-run` with the old sandbox-cloning shape. Building it is mostly
+  deletion: the dump, convert and report pieces already exist and work
+  against real instances; what goes away is the backup clone, the sandbox,
+  the recovery-mode cycle and the boot check. `cmd/run.go`'s sandbox logic
+  disappears with it, which also removes the reason §7 gives for there
+  being no `internal/stage` package.
+- **Post-migration validation has no reachable instance to validate**
+  (§4.7/§4.9). Until the apply-plan reconstructs listeners, nothing that
+  boots from a converted store can answer an API, so "did the migration
+  preserve the data" cannot be asked of the migrated instance at all. This
+  is the strongest argument for building the apply-plan first.
 
 ## Sources
 

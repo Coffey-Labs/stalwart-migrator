@@ -23,6 +23,8 @@ func main() {
 	switch os.Args[1] {
 	case "preflight":
 		err = runPreflight(os.Args[2:])
+	case "rehearse":
+		err = runRehearse(os.Args[2:])
 	case "run":
 		err = runRun(os.Args[2:])
 	case "status":
@@ -45,7 +47,8 @@ func usage() {
 
 commands:
   preflight   run read-only checks and print the migration plan
-  run         --dry-run: simulate and validate against a sandbox (real cutover isn't implemented yet)
+  rehearse    convert this instance's settings and report what will NOT carry over (read-only)
+  run         perform the migration (not implemented yet - refuses)
   status      show the state of an in-progress or completed run
   report      print the validation report for a run`)
 }
