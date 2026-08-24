@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -135,6 +137,14 @@ type SettingsConvertOptions struct {
 	// config.json's contents directly, which would require depending on its
 	// exact schema.
 	PatchPaths map[string]string
+
+	// WorkDir is where the script runs. It matters more than it looks:
+	// migrate_v016.py writes its unmigrated.txt report into the current
+	// working directory, so without this the convert either fails outright
+	// (an unwritable CWD - which is what happens running as a service from
+	// /) or silently drops the single most important output of the whole
+	// migration wherever the operator happened to be standing.
+	WorkDir string
 }
 
 // RunSettingsConvert runs migrate_v016.py's convert subcommand.
@@ -159,9 +169,97 @@ func RunSettingsConvert(ctx context.Context, o SettingsConvertOptions) error {
 		args = append(args, "--patch-paths", strings.Join(pairs, ","))
 	}
 	cmd := exec.CommandContext(ctx, python, args...)
+	if o.WorkDir != "" {
+		if err := os.MkdirAll(o.WorkDir, 0o750); err != nil {
+			return fmt.Errorf("backup: create convert working directory %s: %w", o.WorkDir, err)
+		}
+		cmd.Dir = o.WorkDir
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("backup: migrate_v016.py convert failed: %w (output: %s)", err, out)
 	}
 	return nil
+}
+
+// UnmigratedPrefix is one group of v0.15 settings the conversion did not
+// carry over, as reported by migrate_v016.py's unmigrated.txt.
+type UnmigratedPrefix struct {
+	Prefix string
+	Keys   int
+}
+
+// UnmigratedReport summarizes what a conversion left behind.
+//
+// This is not a footnote. Against a real production instance - 12,401
+// settings - Stalwart's own converter migrated 219 of them, 1.8%, and left
+// 12,182 for the operator to recreate by hand: spam-filter rules, DNSBLs,
+// trusted-domain and URL-redirector lookups, queue scheduling and TLS
+// settings, and server.listener itself, which is why a freshly migrated
+// instance answers on none of the ports the old one did. A migration that
+// reported success while silently discarding this would be worse than one
+// that failed.
+type UnmigratedReport struct {
+	Path      string
+	TotalKeys int
+	Prefixes  []UnmigratedPrefix
+}
+
+// Summary renders the report for an operator, largest groups first.
+func (r *UnmigratedReport) Summary(maxPrefixes int) string {
+	if r == nil || r.TotalKeys == 0 {
+		return "no unmigrated settings were reported"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d v0.15 setting(s) were NOT migrated and must be recreated by hand (full list: %s)", r.TotalKeys, r.Path)
+	prefixes := r.Prefixes
+	if len(prefixes) > maxPrefixes {
+		prefixes = prefixes[:maxPrefixes]
+	}
+	for _, p := range prefixes {
+		fmt.Fprintf(&b, "\n      %-32s %d keys", p.Prefix, p.Keys)
+	}
+	if len(r.Prefixes) > len(prefixes) {
+		fmt.Fprintf(&b, "\n      ... and %d more prefix(es)", len(r.Prefixes)-len(prefixes))
+	}
+	return b.String()
+}
+
+// unmigratedPattern matches the report's per-prefix lines, e.g.
+// "  spam-filter.rule                       424 keys".
+var unmigratedPattern = regexp.MustCompile(`^\s+(\S+)\s+(\d+) keys\s*$`)
+
+// ReadUnmigratedReport parses the unmigrated.txt migrate_v016.py writes
+// beside its output. A missing file is not an error - an older script, or
+// a conversion with nothing left over, simply won't produce one - so
+// callers get a nil report rather than a failure.
+func ReadUnmigratedReport(path string) (*UnmigratedReport, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("backup: read %s: %w", path, err)
+	}
+	report := &UnmigratedReport{Path: path}
+	for _, line := range strings.Split(string(data), "\n") {
+		if m := unmigratedPattern.FindStringSubmatch(line); m != nil {
+			n, convErr := strconv.Atoi(m[2])
+			if convErr != nil {
+				continue
+			}
+			report.Prefixes = append(report.Prefixes, UnmigratedPrefix{Prefix: m[1], Keys: n})
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "Total unmigrated keys:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				if n, convErr := strconv.Atoi(fields[3]); convErr == nil {
+					report.TotalKeys = n
+				}
+			}
+		}
+	}
+	sort.Slice(report.Prefixes, func(i, j int) bool { return report.Prefixes[i].Keys > report.Prefixes[j].Keys })
+	return report, nil
 }

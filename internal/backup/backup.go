@@ -91,7 +91,7 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		sum, size, err := hashFile(preserved)
+		sum, size, err := HashFile(preserved)
 		if err != nil {
 			return checkpoint.StepOutcome{}, fmt.Errorf("backup: hash preserved binary %s: %w", preserved, err)
 		}
@@ -146,7 +146,7 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 			if err := RunPgDump(ctx, opts.SQL); err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
-			sum, size, err := hashFile(opts.SQL.OutPath)
+			sum, size, err := HashFile(opts.SQL.OutPath)
 			if err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
@@ -161,7 +161,7 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 			if err := RunMySQLDump(ctx, opts.SQL); err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
-			sum, size, err := hashFile(opts.SQL.OutPath)
+			sum, size, err := HashFile(opts.SQL.OutPath)
 			if err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
@@ -214,11 +214,11 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		}); err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		settingsSum, settingsSize, err := hashFile(opts.SettingsDumpPath)
+		settingsSum, settingsSize, err := HashFile(opts.SettingsDumpPath)
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		principalsSum, principalsSize, err := hashFile(opts.PrincipalsDumpPath)
+		principalsSum, principalsSize, err := HashFile(opts.PrincipalsDumpPath)
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
@@ -247,7 +247,7 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		}
 		var totalSize int64
 		for i, f := range files {
-			sum, size, err := hashFile(f)
+			sum, size, err := HashFile(f)
 			if err != nil {
 				return checkpoint.StepOutcome{}, err
 			}

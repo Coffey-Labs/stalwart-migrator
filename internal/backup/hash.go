@@ -11,9 +11,9 @@ import (
 	"os"
 )
 
-// hashFile returns a file's SHA256 and size, for recording as a
+// HashFile returns a file's SHA256 and size, for recording as a
 // checkpoint.Artifact.
-func hashFile(path string) (sha256Hex string, size int64, err error) {
+func HashFile(path string) (sha256Hex string, size int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, fmt.Errorf("backup: hash %s: %w", path, err)

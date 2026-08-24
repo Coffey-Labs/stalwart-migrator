@@ -196,20 +196,47 @@ func runRun(args []string) (err error) {
 	}
 	fmt.Printf("cloned verified backup into sandbox: %s\n", sandboxDataDir)
 
+	unmigratedPath := filepath.Join(runWorkDir, "unmigrated.txt")
 	if _, err := store.RunStep(rs, checkpoint.PhaseStage, "convert-settings", func() (checkpoint.StepOutcome, error) {
 		if err := backup.RunSettingsConvert(ctx, backup.SettingsConvertOptions{
 			PythonPath: *pythonPath, ScriptPath: scriptDest,
 			SettingsPath: settingsPath, PrincipalsPath: principalsPath,
 			ConfigPath: sandboxConfigPath, OutputPath: sandboxExportPath,
 			PatchPaths: map[string]string{*dataDir: sandboxDataDir},
+			// Without this the script writes unmigrated.txt into whatever
+			// directory this command was launched from - or fails outright
+			// if that isn't writable.
+			WorkDir: runWorkDir,
 		}); err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("generated %s and %s, patched to point at the sandbox", sandboxConfigPath, sandboxExportPath)}, nil
+		detail := fmt.Sprintf("generated %s and %s, patched to point at the sandbox", sandboxConfigPath, sandboxExportPath)
+		if report, err := backup.ReadUnmigratedReport(unmigratedPath); err == nil && report != nil && report.TotalKeys > 0 {
+			detail += fmt.Sprintf("; %d setting(s) were NOT migrated", report.TotalKeys)
+		}
+		return checkpoint.StepOutcome{Detail: detail, Extra: unmigratedPath}, nil
 	}); err != nil {
 		return fmt.Errorf("convert settings: %w", err)
 	}
 	fmt.Println("generated sandbox config.json and export.json")
+
+	// What the converter could NOT carry over matters more than what it
+	// could: against a real instance this is the overwhelming majority of
+	// the configuration, including the listeners, and an operator who
+	// doesn't read it will bring up a server that answers on no ports.
+	unmigrated, err := backup.ReadUnmigratedReport(unmigratedPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: couldn't read the unmigrated-settings report: %v\n", err)
+	} else if unmigrated != nil && unmigrated.TotalKeys > 0 {
+		if sum, size, hashErr := backup.HashFile(unmigratedPath); hashErr == nil {
+			rs.RecordArtifact("unmigrated-settings", checkpoint.Artifact{Path: unmigratedPath, SHA256: sum, SizeBytes: size})
+			if saveErr := store.Save(rs); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: couldn't record the unmigrated-settings artifact: %v\n", saveErr)
+			}
+		}
+		fmt.Printf("\n  !! %s\n", unmigrated.Summary(10))
+		fmt.Println("     These do not carry over. Recreate them on the migrated instance before it serves mail.")
+	}
 
 	fmt.Println("\n--- recovery-mode migration (against the sandbox) ---")
 	listenURL := fmt.Sprintf("http://127.0.0.1:%d/", *recoveryPort)

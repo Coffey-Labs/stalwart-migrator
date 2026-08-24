@@ -176,3 +176,89 @@ func TestRunSettingsConvertPropagatesFailure(t *testing.T) {
 		t.Errorf("error = %v, want it to include the script's stderr", err)
 	}
 }
+
+// The report this parses is the most consequential output of a real
+// migration: against a production instance with 12,401 settings,
+// migrate_v016.py migrated 219 of them and listed the other 12,182 here.
+// Losing or ignoring this file means bringing up a server that answers on
+// no ports, since server.listener is among the settings that don't carry.
+const sampleUnmigrated = `# Unmigrated v0.15 settings
+
+These v0.15 settings were not migrated by the script and must be
+reviewed manually.
+
+Total unmigrated keys: 12182 across 69 prefixes.
+
+  server.blocked-ip                     8547 keys
+  lookup.url-redirectors                1076 keys
+  spam-filter.rule                       424 keys
+  server.listener                         26 keys
+  asn.expires                              1 keys
+`
+
+func TestReadUnmigratedReportParsesTotalsAndPrefixes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unmigrated.txt")
+	if err := os.WriteFile(path, []byte(sampleUnmigrated), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ReadUnmigratedReport(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.TotalKeys != 12182 {
+		t.Errorf("TotalKeys = %d, want 12182", report.TotalKeys)
+	}
+	if len(report.Prefixes) != 5 {
+		t.Fatalf("parsed %d prefixes, want 5", len(report.Prefixes))
+	}
+	// Largest first, so the summary leads with what matters most.
+	if report.Prefixes[0].Prefix != "server.blocked-ip" || report.Prefixes[0].Keys != 8547 {
+		t.Errorf("first prefix = %+v, want server.blocked-ip 8547", report.Prefixes[0])
+	}
+
+	summary := report.Summary(3)
+	if !strings.Contains(summary, "12182") || !strings.Contains(summary, "must be recreated by hand") {
+		t.Errorf("summary should lead with the scale of the problem:\n%s", summary)
+	}
+	if !strings.Contains(summary, "and 2 more prefix(es)") {
+		t.Errorf("summary should say how much it elided:\n%s", summary)
+	}
+}
+
+// An older script, or a conversion with nothing left over, writes no file.
+// That is not an error.
+func TestReadUnmigratedReportTreatsMissingFileAsNoReport(t *testing.T) {
+	report, err := ReadUnmigratedReport(filepath.Join(t.TempDir(), "absent.txt"))
+	if err != nil {
+		t.Errorf("missing report should not be an error: %v", err)
+	}
+	if report != nil {
+		t.Errorf("report = %+v, want nil", report)
+	}
+}
+
+// migrate_v016.py writes unmigrated.txt into its working directory, so the
+// convert has to run somewhere writable that the caller knows about.
+func TestRunSettingsConvertRunsInTheGivenWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	log := argsFile(t, dir)
+	withFakeExecutable(t, "python3", fakeScriptLoggingArgs(log, "pwd >> "+log+"\ntouch unmigrated.txt"))
+
+	err := RunSettingsConvert(context.Background(), SettingsConvertOptions{
+		ScriptPath: "/tmp/migrate_v016.py", SettingsPath: "/tmp/s.json", PrincipalsPath: "/tmp/p.json",
+		ConfigPath: filepath.Join(dir, "c.json"), OutputPath: filepath.Join(dir, "e.json"),
+		WorkDir: workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readArgsFile(t, log), workDir) {
+		t.Errorf("script did not run in WorkDir; log:\n%s", readArgsFile(t, log))
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "unmigrated.txt")); err != nil {
+		t.Errorf("unmigrated.txt should land in WorkDir, not the caller's cwd: %v", err)
+	}
+}
