@@ -97,10 +97,20 @@ func rewriteExecStart(line, binaryPath, configPath string) (string, error) {
 
 	if configPath != "" {
 		replaced := false
-		for i := 0; i < len(fields)-1; i++ {
-			if fields[i] == "--config" || fields[i] == "-c" {
+		for i := 0; i < len(fields); i++ {
+			switch {
+			// Both spellings are real, and getting this wrong is not
+			// cosmetic: a production unit uses the equals form, and only
+			// matching the separated one appended a second --config, so
+			// the service started with two and used the wrong one - the
+			// v0.15 config, which v0.16 cannot read as a store descriptor.
+			case strings.HasPrefix(fields[i], "--config=") || strings.HasPrefix(fields[i], "-c="):
+				fields[i] = "--config=" + configPath
+				replaced = true
+			case (fields[i] == "--config" || fields[i] == "-c") && i+1 < len(fields):
 				fields[i+1] = configPath
 				replaced = true
+				i++
 			}
 		}
 		if !replaced {

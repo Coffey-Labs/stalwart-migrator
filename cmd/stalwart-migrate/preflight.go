@@ -26,6 +26,8 @@ func runPreflight(args []string) error {
 	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")
+	pythonPath := fs.String("python", "python3", "path to python3, needed by migrate_v016.py")
+	stalwartCLI := fs.String("stalwart-cli", "stalwart-cli", "path to stalwart-cli (v1.0.2 or later; a separate download from the server)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -46,6 +48,8 @@ func runPreflight(args []string) error {
 		AdminPassword:   *adminPassword,
 		TargetVersion:   *targetVersion,
 		MinFreeMultiple: *minFree,
+		CLIPath:         *stalwartCLI,
+		PythonPath:      *pythonPath,
 	})
 
 	report, err := checker.Run(context.Background(), store, rs)

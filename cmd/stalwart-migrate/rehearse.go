@@ -52,6 +52,8 @@ func runRehearse(args []string) (err error) {
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")
 	workDir := fs.String("work-dir", "/var/lib/stalwart-migrator/work", "scratch directory for the dumps and converted plan (cleaned up afterward - see --keep-artifacts)")
 	pythonPath := fs.String("python", "python3", "path to python3")
+	stalwartCLI := fs.String("stalwart-cli", "stalwart-cli",
+		"path to stalwart-cli (v1.0.2 or later; a separate download from the server) - rehearsal doesn't invoke it, but checks it so `run` doesn't fail after stopping the service")
 	migrationScriptSHA256 := fs.String("migration-script-sha256", "", "pinned sha256 of migrate_v016.py (recommended; the first run prints the hash to pin)")
 	minFree := fs.Float64("min-free-multiple", 2.0, "free-space multiple preflight checks for; rehearsal itself copies nothing")
 	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward")
@@ -94,6 +96,10 @@ func runRehearse(args []string) (err error) {
 			fmt.Printf("\nartifacts kept at %s (--keep-artifacts)\n", runWorkDir)
 			return
 		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nthe rehearsal failed; its artifacts are kept at %s for inspection\n", runWorkDir)
+			return
+		}
 		if rmErr := os.RemoveAll(runWorkDir); rmErr != nil {
 			fmt.Fprintf(os.Stderr, "\nwarning: failed to clean up %s: %v (remove it manually)\n", runWorkDir, rmErr)
 			return
@@ -106,6 +112,7 @@ func runRehearse(args []string) (err error) {
 		BinaryPath: *binaryPath, ConfigPath: *configPath, DataDir: *dataDir, ContainerName: *containerName,
 		AdminURL: *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
 		TargetVersion: *targetVersion, MinFreeMultiple: *minFree, HTTPClient: httpClient,
+		CLIPath: *stalwartCLI, PythonPath: *pythonPath,
 	})
 	pfReport, err := checker.Run(ctx, store, rs)
 	fmt.Print(pfReport.String())

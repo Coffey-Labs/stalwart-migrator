@@ -829,6 +829,40 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   - `tenant-admin` has no v0.16 equivalent and is reported as unrestorable
     rather than silently dropped.
 
+- **A live migration attempt failed and cost a restore. Three defects, all
+  fixed, all now proven against a reproduction.** On 2026-08-24 a real
+  migration stopped a production mail server and then discovered the host's
+  `stalwart-cli` was 0.13.4 - present, but from when the CLI shipped with
+  the server, and with no `apply` command. Recovery was closed in both
+  directions: v0.16's recovery-mode boot had already bumped the store schema
+  to v6 (`expected 5 or below, found 6`), so the old binary could not reopen
+  it, and going forward needed `export.json`, which the failure path had
+  deleted - regenerating it required a settings dump from a live v0.15
+  instance that could no longer start. The operator restored a day-old
+  snapshot and lost a day of mail.
+
+  - **Preflight now verifies the external tools** (`CheckExternalTools`),
+    before anything is touched: stalwart-cli must exist and be v1.0.2 or
+    later, and python3 must run. Every fact needed to prevent that outage
+    was available in under a second from a stopped state. Skipped entirely
+    for a patch upgrade, which invokes neither tool.
+  - **A failed run no longer deletes its own inputs.** The cleanup applied
+    to every exit path, which was right for a sandboxed rehearsal and
+    catastrophic here: after the service is stopped, the settings dump
+    cannot be regenerated, so deleting it removes the only way forward.
+  - **`run --resume <id>` continues an interrupted run.** The checkpoint
+    machinery existed but never engaged, because `run` created a new run
+    every invocation - so a retry would re-run preflight against a binary
+    already moved aside and fail. Completed steps are now skipped.
+
+  Verified on a VM built to match: stalwart-cli 0.15.5 installed, accounts
+  and mail seeded. Preflight refused with the service still running and mail
+  still flowing; a stub CLI that passed the version check and failed the
+  apply left the run stopped with all eight inputs intact; and `--resume`
+  carried it to a clean finish - five seconds of downtime, quotas rebuilt.
+  That failure-path test is the one that should have run before production,
+  and did not.
+
 - **`run` is built and works.** preflight -> stage -> dump -> preserve ->
   stop -> convert -> supplement -> recovery-mode -> cutover, checkpointed
   throughout, verified end to end against a real 0.15.5: mail down for six

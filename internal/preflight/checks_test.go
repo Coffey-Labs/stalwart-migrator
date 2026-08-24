@@ -44,6 +44,10 @@ func countLines(t *testing.T, path string) int {
 }
 
 func TestCheckerRunEndToEndAndResume(t *testing.T) {
+	// preflight now verifies the external tools before anything else; give
+	// this environment ones that satisfy it.
+	fakeTool(t, "stalwart-cli", "stalwart-cli 1.0.12")
+	fakeTool(t, "python3", "Python 3.13.5")
 	// -- fixtures --------------------------------------------------------
 	counterPath := filepath.Join(t.TempDir(), "invocations")
 	binaryPath := writeFakeBinary(t, "0.15.5", counterPath)
@@ -200,6 +204,10 @@ func TestCheckerRunFlagsInsufficientDiskSpace(t *testing.T) {
 }
 
 func TestCheckerRunCapturesAccountSnapshotWhenAdminURLSet(t *testing.T) {
+	// preflight now verifies the external tools before anything else; give
+	// this environment ones that satisfy it.
+	fakeTool(t, "stalwart-cli", "stalwart-cli 1.0.12")
+	fakeTool(t, "python3", "Python 3.13.5")
 	counterPath := filepath.Join(t.TempDir(), "invocations")
 	binaryPath := writeFakeBinary(t, "0.15.5", counterPath)
 

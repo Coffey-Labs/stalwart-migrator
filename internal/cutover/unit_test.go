@@ -128,3 +128,40 @@ func TestRewriteUnitHandlesMultipleExecStartLines(t *testing.T) {
 		t.Fatalf("an empty ExecStart= names no executable and should be refused, got:\n%s", got)
 	}
 }
+
+// A real production unit writes ExecStart=... --config=/path. Only matching
+// the separated "--config /path" form appended a second flag, leaving the
+// service started with two configs and using the v0.15 one - which v0.16
+// cannot read as a store descriptor. Found while preparing a live
+// migration, before it ran.
+func TestRewriteUnitReplacesTheEqualsFormConfig(t *testing.T) {
+	unit := "[Service]\nExecStart=/opt/stalwart/bin/stalwart --config=/opt/stalwart/etc/config.toml\n"
+	got, err := RewriteUnit(unit, "/opt/stalwart/bin/stalwart", "/opt/stalwart/etc/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got, "--config") != 1 {
+		t.Errorf("expected exactly one --config argument, got:\n%s", got)
+	}
+	if !strings.Contains(got, "--config=/opt/stalwart/etc/config.json") {
+		t.Errorf("equals-form config not replaced:\n%s", got)
+	}
+	if strings.Contains(got, "config.toml") {
+		t.Errorf("the old config path survived:\n%s", got)
+	}
+}
+
+// The separated form must keep working; both spellings are real.
+func TestRewriteUnitReplacesTheSeparatedFormConfig(t *testing.T) {
+	unit := "[Service]\nExecStart=/usr/local/bin/stalwart --config /etc/stalwart/config.toml\n"
+	got, err := RewriteUnit(unit, "/usr/local/bin/stalwart", "/etc/stalwart/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got, "--config") != 1 {
+		t.Errorf("expected exactly one --config argument, got:\n%s", got)
+	}
+	if !strings.Contains(got, "--config /etc/stalwart/config.json") {
+		t.Errorf("separated-form config not replaced:\n%s", got)
+	}
+}

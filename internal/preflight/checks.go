@@ -27,7 +27,12 @@ type Options struct {
 	AdminPassword   string
 	TargetVersion   string // e.g. "0.16.14" or "latest"
 	MinFreeMultiple float64
-	HTTPClient      *http.Client
+	// CLIPath and PythonPath are the external programs the migration
+	// shells out to. Checked before anything is touched - see
+	// CheckExternalTools.
+	CLIPath    string
+	PythonPath string
+	HTTPClient *http.Client
 }
 
 // Checker runs the preflight checks described in ARCHITECTURE.md §4.1.
@@ -107,7 +112,7 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 		return report, err
 	}
 
-	if _, err := runCheck("upgrade-direction", func() (CheckResult, string) {
+	boundaryOutcome, err := runCheck("upgrade-direction", func() (CheckResult, string) {
 		curV, errCur := parseSemver(versionOutcome.Extra)
 		tgtV, errTgt := parseSemver(targetOutcome.Extra)
 		if errCur != nil || errTgt != nil {
@@ -123,14 +128,26 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 			return CheckResult{
 				Status: StatusOK,
 				Detail: fmt.Sprintf("%s -> %s crosses the 0.15/0.16 major boundary: full recovery-mode migration plan required (ARCHITECTURE.md §4.4)", curV, tgtV),
-			}, ""
+			}, "crosses"
 		}
 		return CheckResult{
 			Status: StatusOK,
 			Detail: fmt.Sprintf("%s -> %s is a same-boundary patch upgrade: fast-path plan applies (ARCHITECTURE.md §4.6)", curV, tgtV),
-		}, ""
-	}); err != nil {
+		}, "patch"
+	})
+	if err != nil {
 		return report, err
+	}
+	crossesBoundary := boundaryOutcome.Extra != "patch"
+
+	// Before anything else that matters: are the tools this migration
+	// depends on actually here? Discovering a missing stalwart-cli after
+	// the service has been stopped is what this exists to prevent.
+	for _, res := range CheckExternalTools(ctx, c.opts.CLIPath, c.opts.PythonPath, crossesBoundary) {
+		result := res
+		if _, err := runCheck(result.Name, func() (CheckResult, string) { return result, "" }); err != nil {
+			return report, err
+		}
 	}
 
 	deploymentOutcome, err := runCheck("deployment-kind", func() (CheckResult, string) {

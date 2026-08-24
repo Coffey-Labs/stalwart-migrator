@@ -69,6 +69,7 @@ func runRun(args []string) (err error) {
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	recalcQuotas := fs.Bool("recalculate-quotas", true, "schedule the post-migration quota rebuild")
 	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward")
+	resume := fs.String("resume", "", "resume an interrupted run by id instead of starting a new one (see `status` for ids)")
 	yes := fs.Bool("yes", false, "actually perform the migration")
 	recoveryConfirmed := fs.Bool("recovery-point-confirmed", false,
 		"confirm you have a snapshot or backup you have verified you can restore - this tool cannot undo a migration")
@@ -104,11 +105,25 @@ func runRun(args []string) (err error) {
 	}
 
 	store := checkpoint.NewStore(*stateDir)
-	rs, err := store.Create("", *targetVersion)
-	if err != nil {
-		return fmt.Errorf("create run: %w", err)
+	var rs *checkpoint.RunState
+	if *resume != "" {
+		// Resuming is not a convenience. A run that fails partway leaves
+		// the service stopped and the store part-migrated, and starting
+		// over is often impossible: preflight would re-run against a
+		// binary that has already been moved aside, and the settings dump
+		// needs a live pre-migration instance that no longer exists.
+		// Completed steps are skipped from the checkpoint, so this picks
+		// up where it stopped.
+		if rs, err = store.Load(*resume); err != nil {
+			return fmt.Errorf("resume run %s: %w", *resume, err)
+		}
+		fmt.Printf("\nresuming run: %s (completed steps will be skipped)\n", rs.RunID)
+	} else {
+		if rs, err = store.Create("", *targetVersion); err != nil {
+			return fmt.Errorf("create run: %w", err)
+		}
+		fmt.Printf("\nrun id: %s\n", rs.RunID)
 	}
-	fmt.Printf("\nrun id: %s\n", rs.RunID)
 	runWorkDir := filepath.Join(*workDir, rs.RunID)
 	runStateDir := filepath.Join(*stateDir, rs.RunID)
 	if err := os.MkdirAll(runWorkDir, 0o750); err != nil {
@@ -117,6 +132,18 @@ func runRun(args []string) (err error) {
 	defer func() {
 		if *keepArtifacts {
 			fmt.Printf("\nartifacts kept at %s (--keep-artifacts)\n", runWorkDir)
+			return
+		}
+		if err != nil {
+			// Never clean up after a failure. These files - the settings
+			// dump, the converted config and export plan - are the run's
+			// inputs, and after the service has been stopped they cannot
+			// be regenerated: the dump needs a live pre-migration instance.
+			// Deleting them once turned a missing-dependency error into a
+			// restore-from-snapshot, because there was no way forward and
+			// no way back.
+			fmt.Fprintf(os.Stderr, "\nthe run failed; its artifacts are kept at %s\n", runWorkDir)
+			fmt.Fprintf(os.Stderr, "resume it once the cause is fixed:\n  stalwart-migrate run --resume %s [same flags]\n", rs.RunID)
 			return
 		}
 		if rmErr := os.RemoveAll(runWorkDir); rmErr != nil {
@@ -129,6 +156,7 @@ func runRun(args []string) (err error) {
 		BinaryPath: *binaryPath, ConfigPath: *configPath, DataDir: *dataDir, ContainerName: *containerName,
 		AdminURL: *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
 		TargetVersion: *targetVersion, MinFreeMultiple: *minFree, HTTPClient: httpClient,
+		CLIPath: *stalwartCLI, PythonPath: *pythonPath,
 	}).Run(ctx, store, rs)
 	fmt.Print(pfReport.String())
 	if err != nil {
