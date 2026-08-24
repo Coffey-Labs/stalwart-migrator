@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,75 @@ func TestWaitForHealthyTimesOut(t *testing.T) {
 	err := WaitForHealthy(context.Background(), nil, url, 500*time.Millisecond)
 	if err == nil {
 		t.Fatal("WaitForHealthy should time out when nothing is listening")
+	}
+}
+
+// The bug this guards against cost several rounds of diagnosis against a
+// real Stalwart: recovery mode failed because port 8080 was already in use,
+// Stalwart said exactly that immediately, and the tool discarded it and
+// reported only a 60-second timeout and "connection refused". The helper
+// process here fails the same way - it can't bind its port and says so on
+// stderr before exiting.
+func TestProcessCapturesOutputFromAFailedStart(t *testing.T) {
+	// Occupy the port first, so the child's bind fails exactly as
+	// Stalwart's did.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := fmt.Sprint(ln.Addr().(*net.TCPAddr).Port)
+
+	proc := &Process{}
+	if err := proc.Start(context.Background(), ProcessOptions{
+		BinaryPath: os.Args[0],
+		ExtraEnv: []string{
+			"STALWART_MIGRATOR_TEST_HELPER=1",
+			"STALWART_MIGRATOR_TEST_PORT=" + port,
+		},
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Poll a port nothing is listening on, exactly as the real flow does:
+	// the tool waits for a listener that never appears while the child is
+	// busy failing and saying why.
+	err = WaitForHealthy(context.Background(), nil, "http://127.0.0.1:1/", time.Second)
+	if err == nil {
+		t.Fatal("WaitForHealthy should not have succeeded against an unreachable URL")
+	}
+	_ = proc.Stop(5 * time.Second)
+
+	got := proc.Output()
+	if !strings.Contains(got, "fake stalwart: listen:") {
+		t.Errorf("captured output = %q, want the child's own bind failure - without it a caller can only report a timeout", got)
+	}
+}
+
+func TestProcessOutputIsSafeBeforeStartAndAfterStop(t *testing.T) {
+	proc := &Process{}
+	if got := proc.Output(); got != "" {
+		t.Errorf("Output() before Start = %q, want empty", got)
+	}
+	if err := proc.Stop(time.Second); err != nil {
+		t.Errorf("Stop on an unstarted process: %v", err)
+	}
+}
+
+// A long-lived server would otherwise grow this buffer without bound.
+func TestOutputBufferKeepsTheMostRecentOutput(t *testing.T) {
+	b := &outputBuffer{}
+	for i := 0; i < 4000; i++ {
+		fmt.Fprintf(b, "line %d filler filler filler filler filler\n", i)
+	}
+	got := b.String()
+	if len(got) > maxCapturedOutput+64 {
+		t.Errorf("buffer grew to %d bytes, want it bounded near %d", len(got), maxCapturedOutput)
+	}
+	if !strings.Contains(got, "line 3999") {
+		t.Error("the most recent output was dropped; a failure's reason is at the end of the log")
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Error("truncation should be visible, not silent")
 	}
 }

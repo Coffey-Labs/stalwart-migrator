@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
@@ -80,7 +81,12 @@ func BootCheck(ctx context.Context, o BootCheckOptions) (detail string, result *
 		timeout = 30 * time.Second
 	}
 	if healthErr := recovery.WaitForHealthy(ctx, o.HTTPClient, o.ListenURL, timeout); healthErr != nil {
-		return "", nil, fmt.Errorf("migrated instance did not come up under a normal (non-recovery-mode) boot: %w", healthErr)
+		out := strings.TrimSpace(proc.Output())
+		if out == "" {
+			out = "(the process produced no output)"
+		}
+		return "", nil, fmt.Errorf("migrated instance did not come up under a normal (non-recovery-mode) boot: %w\n"+
+			"--- output from the supervised Stalwart process ---\n%s\n--- end of output ---", healthErr, out)
 	}
 	detail = fmt.Sprintf("migrated instance booted normally (not in recovery mode) and answered at %s", o.ListenURL)
 

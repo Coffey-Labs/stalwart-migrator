@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
@@ -87,13 +88,13 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 			startupTimeout = 60 * time.Second
 		}
 		if healthErr := WaitForHealthy(ctx, opts.HTTPClient, opts.ListenURL, startupTimeout); healthErr != nil {
-			return checkpoint.StepOutcome{}, fmt.Errorf("recovery mode did not come up: %w", healthErr)
+			return checkpoint.StepOutcome{}, fmt.Errorf("recovery mode did not come up: %w%s", healthErr, outputSuffix(proc))
 		}
 
 		if applyErr := ApplyAll(ctx, ApplyOptions{
 			CLIBinaryPath: opts.CLIBinaryPath, URL: opts.ListenURL, User: opts.AdminUser, Password: password,
 		}, opts.ApplyFiles); applyErr != nil {
-			return checkpoint.StepOutcome{}, fmt.Errorf("settings apply failed: %w", applyErr)
+			return checkpoint.StepOutcome{}, fmt.Errorf("settings apply failed: %w%s", applyErr, outputSuffix(proc))
 		}
 
 		return checkpoint.StepOutcome{
@@ -107,4 +108,17 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 	}
 	report.Results = append(report.Results, CheckResult{Name: "recovery-cycle", Status: StatusOK, Detail: outcome.Detail})
 	return report, nil
+}
+
+// outputSuffix renders a supervised process's captured output for
+// appending to an error, or nothing if it produced none. The server's own
+// words are usually the whole diagnosis - a bind conflict, a rejected
+// config value - and without them the caller is left guessing at a
+// timeout.
+func outputSuffix(proc *Process) string {
+	out := strings.TrimSpace(proc.Output())
+	if out == "" {
+		return " (the process produced no output)"
+	}
+	return fmt.Sprintf("\n--- output from the supervised Stalwart process ---\n%s\n--- end of output ---", out)
 }

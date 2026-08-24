@@ -5,12 +5,49 @@ package recovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
+
+// maxCapturedOutput bounds what Process keeps from the child's stdout and
+// stderr. Stalwart logs continuously once it is up, so this keeps the most
+// recent output rather than the whole session - which is also what a
+// failure needs, since the reason a server died is at the end of its log.
+const maxCapturedOutput = 64 << 10
+
+// outputBuffer collects the child process's combined output for use in
+// error messages. exec.Cmd writes to it from its own goroutine while the
+// supervising goroutine may read it, hence the mutex.
+type outputBuffer struct {
+	mu        sync.Mutex
+	buf       []byte
+	truncated bool
+}
+
+func (b *outputBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > maxCapturedOutput {
+		b.buf = b.buf[len(b.buf)-maxCapturedOutput:]
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *outputBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.truncated {
+		return "...(earlier output truncated)...\n" + string(b.buf)
+	}
+	return string(b.buf)
+}
 
 // ProcessOptions configures how the target binary is launched.
 type ProcessOptions struct {
@@ -39,8 +76,27 @@ type ProcessOptions struct {
 // child process, so a caller can start it, wait for it to become healthy,
 // interact with it, and stop it again - without ever touching a real
 // systemd unit or Docker container. See ARCHITECTURE.md §4.4.
+//
+// It captures the child's output. That is not a nicety: a smoke test
+// against a real 0.15.5 instance spent several rounds diagnosing a recovery
+// boot that failed because port 8080 was already in use, and the tool
+// reported only "connection refused" after a 60-second timeout - while
+// Stalwart had printed "Failed to bind to [::]:8080: Address already in
+// use" immediately, to a pipe nothing was reading. Anything that reports a
+// supervised process failing must be able to say why.
 type Process struct {
-	cmd *exec.Cmd
+	cmd    *exec.Cmd
+	output *outputBuffer
+}
+
+// Output returns what the child has written to stdout and stderr so far,
+// most-recent-first-truncated if it exceeded maxCapturedOutput. Safe to
+// call at any point, including before Start and after Stop.
+func (p *Process) Output() string {
+	if p.output == nil {
+		return ""
+	}
+	return p.output.String()
 }
 
 // Start launches the binary. It returns as soon as the OS has started the
@@ -58,6 +114,9 @@ func (p *Process) Start(ctx context.Context, o ProcessOptions) error {
 
 	cmd := exec.CommandContext(ctx, o.BinaryPath, "--config", o.ConfigPath)
 	cmd.Env = append(os.Environ(), env...)
+	p.output = &outputBuffer{}
+	cmd.Stdout = p.output
+	cmd.Stderr = p.output
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("recovery: start %s: %w", o.BinaryPath, err)
 	}
@@ -74,7 +133,12 @@ func (p *Process) Stop(gracePeriod time.Duration) error {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	// A process that already exited on its own still has to be reaped:
+	// cmd.Wait is what collects its status and, crucially, waits for the
+	// goroutines copying its output into our buffer. Returning early here
+	// would discard that output in exactly the case where it matters most -
+	// the server died by itself and its log says why.
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("recovery: signal process (pid %d): %w", p.cmd.Process.Pid, err)
 	}
 
