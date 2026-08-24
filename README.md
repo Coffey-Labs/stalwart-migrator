@@ -145,6 +145,38 @@ a sandbox and migrated the copy. That proved the store opens, at the cost of
 copying it twice — while the half that found every real problem needed no
 copy at all. ARCHITECTURE.md §4.9 has the reasoning.
 
+## You need a named admin account before you migrate
+
+**A config-file fallback admin will not survive the migration.** If the only
+administrator you have is an `[authentication.fallback-admin]` block in
+`config.toml` — which is what `stalwart --init` sets up — you will come out
+of the migration unable to administer the server.
+
+Create a real account in the directory, with the admin role, and confirm you
+can log in as it *before* migrating. Three separate reasons, all verified
+against a real 0.15.5 → 0.16.14 migration:
+
+1. **v0.16 keeps its configuration in the store, not in a file.** After the
+   migration the server is started with a config that is little more than a
+   pointer at the data store, so the old `config.toml` — and the
+   fallback-admin block inside it — is no longer read at all. That
+   credential simply stops existing.
+2. **`migrate_v016.py` gives every migrated account the `User` role**,
+   whatever it held before. An account that was an administrator in v0.15
+   comes out authenticating normally and refused every management
+   operation. `rehearse` generates the operation that restores it — but the
+   account has to exist in the directory for there to be anything to
+   restore.
+3. **The account's local part must be unambiguous.** v0.16 identifies an
+   account by local part plus domain, so if `admin@one.example` and
+   `admin@two.example` both exist, this tool will refuse to restore either
+   role rather than risk granting administrator rights to the wrong one.
+   It says so rather than guessing; you then grant it by hand.
+
+The practical check: before you migrate, make sure you can authenticate to
+the admin API as a directory account — not as the fallback admin — and that
+its local part is unique across your domains.
+
 ## Recovery is your job
 
 **This tool does not undo a migration.** There is no `rollback` command.
