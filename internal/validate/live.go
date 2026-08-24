@@ -71,11 +71,16 @@ func RunLive(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunSta
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		if !r.OK() {
+		switch {
+		case !r.OK():
 			// Recorded as a completed step with a failing verdict rather
 			// than an error: the comparison ran, and its answer is the
 			// finding. An error here would read as "we could not look".
 			return checkpoint.StepOutcome{Verdict: string(StatusFail), Detail: r.String()}, nil
+		case !r.DomainsOK():
+			// The two versions disagree about what counts as a domain, so
+			// this is reported rather than treated as data loss.
+			return checkpoint.StepOutcome{Verdict: string(StatusWarn), Detail: r.String()}, nil
 		}
 		return checkpoint.StepOutcome{Detail: r.String()}, nil
 	})
@@ -88,8 +93,11 @@ func RunLive(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunSta
 	}
 
 	status := StatusOK
-	if outcome.Verdict == string(StatusFail) {
+	switch outcome.Verdict {
+	case string(StatusFail):
 		status = StatusFail
+	case string(StatusWarn):
+		status = StatusWarn
 	}
 	report.Results = append(report.Results, CheckResult{Name: "content-integrity", Status: status, Detail: outcome.Detail})
 	return report, nil

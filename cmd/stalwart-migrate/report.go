@@ -76,6 +76,8 @@ func reportFromSteps(rs *checkpoint.RunState) validate.Report {
 			status = validate.StatusFail
 		case step.Verdict == string(validate.StatusSkip):
 			status = validate.StatusSkip
+		case step.Verdict == string(validate.StatusWarn):
+			status = validate.StatusWarn
 		case step.Status != checkpoint.StepDone:
 			// Recorded but never completed: the run stopped partway.
 			status = validate.StatusFail

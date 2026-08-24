@@ -18,6 +18,9 @@ const (
 	// are different answers, and reporting the second as the first is the
 	// failure mode ARCHITECTURE.md §4.7 warns about.
 	StatusSkip Status = "skip"
+	// StatusWarn is a finding worth an operator's attention that is not
+	// worth failing a migration over.
+	StatusWarn Status = "warn"
 )
 
 type CheckResult struct {

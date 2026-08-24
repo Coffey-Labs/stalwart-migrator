@@ -356,3 +356,55 @@ func TestTenantNamesReportsTenantPrincipals(t *testing.T) {
 		t.Error("TenantNames returned nil without an error; want a (possibly empty) list")
 	}
 }
+
+// The "before" side of the post-migration comparison. It used to add every
+// domain appearing in any account's address on top of the domain principals,
+// so an instance with three declared domains and accounts aliased across nine
+// reported nine - and the 0.16 side, which lists the domains the server
+// actually holds, then looked as though six had been lost by a migration that
+// lost nothing. INBUXA is exactly that shape.
+func TestRESTSnapshotDoesNotInflateDomainsWithAliases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		typ := r.URL.Query().Get("types")
+		w.Header().Set("content-type", "application/json")
+		switch typ {
+		case "domain":
+			_, _ = w.Write([]byte(`{"data":{"items":[{"type":"domain","name":"example.org"}],"total":1}}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":{"items":[{"type":"individual","name":"ann@example.org",` +
+				`"emails":["ann@example.org","ann@alias.example","ann@other.example"],"usedQuota":1}],"total":1}}`))
+		}
+	}))
+	defer srv.Close()
+
+	snap, err := (&Client{BaseURL: srv.URL, Username: "admin", Password: "pw", HTTPClient: srv.Client()}).principalSnapshotREST(context.Background())
+	if err != nil {
+		t.Fatalf("principalSnapshotREST: %v", err)
+	}
+	if len(snap.Domains) != 1 || snap.Domains[0] != "example.org" {
+		t.Fatalf("Domains = %v, want just the declared domain principal", snap.Domains)
+	}
+}
+
+// The fallback still exists for an instance that declares none, where an
+// address is the only evidence a domain is in use.
+func TestRESTSnapshotFallsBackToAddressesWhenNoDomainPrincipals(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		if r.URL.Query().Get("types") == "domain" {
+			_, _ = w.Write([]byte(`{"data":{"items":[],"total":0}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"items":[{"type":"individual","name":"ann@example.org",` +
+			`"emails":["ann@example.org"],"usedQuota":1}],"total":1}}`))
+	}))
+	defer srv.Close()
+
+	snap, err := (&Client{BaseURL: srv.URL, Username: "admin", Password: "pw", HTTPClient: srv.Client()}).principalSnapshotREST(context.Background())
+	if err != nil {
+		t.Fatalf("principalSnapshotREST: %v", err)
+	}
+	if len(snap.Domains) != 1 || snap.Domains[0] != "example.org" {
+		t.Fatalf("Domains = %v, want the domain implied by the address", snap.Domains)
+	}
+}

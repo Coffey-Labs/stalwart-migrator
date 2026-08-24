@@ -180,12 +180,21 @@ func (c *Client) principalSnapshotREST(ctx context.Context) (*Snapshot, error) {
 			domainSet[d.Name] = true
 		}
 	}
-	// Fall back to the domains implied by account addresses if the
-	// instance has no explicit domain principals.
-	for _, p := range individuals {
-		for _, email := range p.Emails {
-			if at := strings.LastIndex(email, "@"); at >= 0 && at+1 < len(email) {
-				domainSet[email[at+1:]] = true
+	// Fall back to the domains implied by account addresses only when the
+	// instance declares no domain principals at all.
+	//
+	// This loop used to run unconditionally, which quietly inflated the
+	// list with every alias domain. That matters because this snapshot is
+	// the "before" side of the post-migration comparison, and the 0.16 side
+	// reports the domains the server actually holds: an alias domain that
+	// was never its own principal would be present here, absent there, and
+	// reported as lost by a migration that lost nothing.
+	if len(domainSet) == 0 {
+		for _, p := range individuals {
+			for _, email := range p.Emails {
+				if at := strings.LastIndex(email, "@"); at >= 0 && at+1 < len(email) {
+					domainSet[email[at+1:]] = true
+				}
 			}
 		}
 	}

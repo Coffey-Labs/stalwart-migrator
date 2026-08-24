@@ -101,7 +101,40 @@ func TestRunLiveFailsWhenAnAccountIsMissing(t *testing.T) {
 	}
 }
 
-func TestRunLiveFailsWhenADomainIsMissing(t *testing.T) {
+func TestRunLiveWarnsButDoesNotBlockWhenADomainIsMissing(t *testing.T) {
+	// What the two versions call a domain differs across the 0.15/0.16
+	// boundary - principals on one side, Domain objects on the other, with
+	// aliases counted differently - and INBUXA's own before-list was
+	// inflated with alias domains that the after-list structurally cannot
+	// contain. Failing the migration on that would abort a run that lost
+	// nothing, so it is reported and not treated as data loss.
+	srv := fakeInstance(t, []string{"example.org"}, map[string]float64{"ann@example.org": 10})
+	defer srv.Close()
+
+	store, rs := newRun(t)
+	report, err := RunLive(context.Background(), store, rs, LiveOptions{
+		AdminURL: srv.URL, AdminUser: "admin", AdminPassword: "pw", HTTPClient: srv.Client(),
+		Before: &checkpoint.PreflightSnapshot{
+			Domains:   []string{"example.org", "alias.example"},
+			UsedQuota: map[string]int64{"ann@example.org": 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunLive: %v", err)
+	}
+	if report.Blocking() {
+		t.Fatalf("a domain-only difference must not abort the migration, got: %s", report.String())
+	}
+	if got := report.Results[0].Status; got != StatusWarn {
+		t.Fatalf("status = %q, want %q", got, StatusWarn)
+	}
+	if !strings.Contains(report.Results[0].Detail, "alias.example") {
+		t.Fatalf("the operator still needs to be told which domain, got %q", report.Results[0].Detail)
+	}
+}
+
+func TestRunLiveStillBlocksWhenAnAccountAndADomainAreMissing(t *testing.T) {
+	// A lost account is a lost account, whatever the domain list says.
 	srv := fakeInstance(t, []string{"example.org"}, map[string]float64{"ann@example.org": 10})
 	defer srv.Close()
 
@@ -109,15 +142,12 @@ func TestRunLiveFailsWhenADomainIsMissing(t *testing.T) {
 	report, _ := RunLive(context.Background(), store, rs, LiveOptions{
 		AdminURL: srv.URL, AdminUser: "admin", AdminPassword: "pw", HTTPClient: srv.Client(),
 		Before: &checkpoint.PreflightSnapshot{
-			Domains:   []string{"example.org", "vanished.example"},
-			UsedQuota: map[string]int64{"ann@example.org": 1},
+			Domains:   []string{"example.org", "alias.example"},
+			UsedQuota: map[string]int64{"ann@example.org": 1, "bob@example.org": 2},
 		},
 	})
 	if !report.Blocking() {
-		t.Fatalf("a missing domain must block, got: %s", report.String())
-	}
-	if !strings.Contains(report.Results[0].Detail, "vanished.example") {
-		t.Fatalf("the report should name the missing domain, got %q", report.Results[0].Detail)
+		t.Fatalf("a missing account must still block, got: %s", report.String())
 	}
 }
 

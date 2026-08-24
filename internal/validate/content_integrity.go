@@ -43,11 +43,25 @@ type ContentIntegrityResult struct {
 	MessageCountsCompared  bool           // false when the source version could not report counts
 }
 
-// OK reports whether everything this comparison was able to check matched.
-// Read it together with MessageCountsCompared: OK with that false means
-// "the directory survived", not "no mail was lost".
+// OK reports whether everything that must match did: no account and no mail
+// went missing. Read it together with MessageCountsCompared: OK with that
+// false means "the directory survived", not "no mail was lost".
+//
+// Domains are deliberately not part of this. What the two versions call a
+// domain differs across the 0.15/0.16 boundary — principals on one side,
+// Domain objects on the other, with aliases and account-less domains
+// counted differently — and we have already been caught once reporting a
+// migration that lost nothing as having lost domains. A disagreement there
+// is worth showing an operator; it is not worth failing a migration over,
+// where a missing account is.
 func (r ContentIntegrityResult) OK() bool {
-	return len(r.MissingAccounts) == 0 && len(r.MessageCountMismatches) == 0 && len(r.MissingDomains) == 0
+	return len(r.MissingAccounts) == 0 && len(r.MessageCountMismatches) == 0
+}
+
+// DomainsOK reports whether every domain seen before the migration is still
+// listed after it.
+func (r ContentIntegrityResult) DomainsOK() bool {
+	return len(r.MissingDomains) == 0
 }
 
 func (r ContentIntegrityResult) String() string {
@@ -59,7 +73,10 @@ func (r ContentIntegrityResult) String() string {
 			"(this migration's source version reports no per-mailbox counts, so no-data-loss is NOT verified here - "+
 			"only that every account and domain survived)", r.AccountsChecked)
 	}
-	if r.OK() {
+	// Everything below is a finding, so return early only when there is
+	// nothing at all to report - domains included, even though they no
+	// longer fail the run. A warning nobody can read is not a warning.
+	if r.OK() && r.DomainsOK() {
 		if r.MessageCountsCompared {
 			b.WriteString(", all message counts match")
 		}

@@ -185,14 +185,22 @@ func (c *Client) accountSnapshotJMAP(ctx context.Context) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stalwartapi: resolve domain names (an unresolved id would make every domain look missing): %w", err)
 	}
+	// Every domain the server holds, not only those some account calls its
+	// primary. Deriving the list from accounts dropped alias domains and
+	// domains with no accounts, so comparing it against a "before" list
+	// that did include them reported losses that had not happened.
 	domainSet := map[string]bool{}
+	for _, name := range domainNames {
+		if name != "" {
+			domainSet[name] = true
+		}
+	}
 	for _, a := range accounts {
 		if a.DomainID == "" {
 			continue
 		}
 		if name, ok := domainNames[a.DomainID]; ok && name != "" {
-			domainSet[name] = true
-			continue
+			continue // already counted above
 		}
 		// Keep the raw id rather than dropping the domain entirely: a
 		// domain that can't be named is still a domain that exists.

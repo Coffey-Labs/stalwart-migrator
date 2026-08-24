@@ -39,8 +39,11 @@ was down for **6 seconds** end to end. Plan the window around verification,
 not data volume.
 
 After cutover, `run` compares the migrated instance against the snapshot
-preflight took, and fails the command if an account or a domain that existed
-before is missing from it. The service is left running either way — by that
+preflight took, and fails the command if an account that existed before is
+missing from it. A domain that no longer appears is reported as a warning
+rather than a failure: the two versions do not agree on what counts as a
+domain — principals on one side, `Domain` objects on the other — and failing
+a migration over that difference would abort runs that lost nothing. The service is left running either way — by that
 point the store has been migrated in place, so stopping it would not undo
 anything; your recovery point is the way back. `report <run-id>` prints the
 same finding again later. Where preflight had no admin URL to snapshot from,
