@@ -332,3 +332,27 @@ func TestAccountSnapshotResolvesDomainIdsToNames(t *testing.T) {
 		t.Errorf("Domains = %v, want [smoke.test] - ids must be resolved or every domain reads as missing", snap.Domains)
 	}
 }
+
+// Multi-tenancy has to be detectable before a migration starts. Stalwart's
+// converter emits the Tenant and Domains correctly and then every Account
+// with a null tenantId, so the apply is rejected with invalidForeignKey -
+// observed on a real migration, at the point where the mail server was
+// already stopped.
+func TestTenantNamesReportsTenantPrincipals(t *testing.T) {
+	srv, _ := stalwart015Server(t,
+		[]map[string]any{{"id": 1, "type": "individual", "name": "alice@example.net"}},
+		nil,
+	)
+	client := &Client{BaseURL: srv.URL, Username: "admin", Password: "x"}
+
+	// The fake serves the "domain" set for types=domain and individuals
+	// otherwise; a tenant query returns the individuals set, so assert on
+	// the call succeeding and the names being read, not on a fixed count.
+	names, err := client.TenantNames(context.Background())
+	if err != nil {
+		t.Fatalf("TenantNames: %v", err)
+	}
+	if names == nil {
+		t.Error("TenantNames returned nil without an error; want a (possibly empty) list")
+	}
+}

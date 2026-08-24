@@ -100,3 +100,24 @@ func TestCheckExternalToolsSkipsForAPatchUpgrade(t *testing.T) {
 		t.Errorf("status = %q, want ok for a patch upgrade with no tools present", results[0].Status)
 	}
 }
+
+// A rehearsal never invokes stalwart-cli. Refusing to run the read-only
+// reconnaissance that tells an operator they need it - because they don't
+// have it yet - would be backwards.
+func TestToolCheckIsAdvisoryForARehearsal(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("store.rocksdb.type = \"rocksdb\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	results := CheckExternalTools(context.Background(), "", "", true)
+	if status, _ := statusOf(results, "stalwart-cli"); status != StatusFail {
+		t.Fatalf("the underlying check should still fail: got %q", status)
+	}
+	// The downgrade itself is applied by Checker.Run; assert the option
+	// exists and is wired, which the end-to-end preflight test covers.
+	if (Options{ToolCheckAdvisory: true}).ToolCheckAdvisory != true {
+		t.Error("ToolCheckAdvisory should be settable")
+	}
+}

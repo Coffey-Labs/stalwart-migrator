@@ -32,7 +32,15 @@ type Options struct {
 	// CheckExternalTools.
 	CLIPath    string
 	PythonPath string
-	HTTPClient *http.Client
+	// ToolCheckAdvisory downgrades the external-tool checks from blocking
+	// to advisory. `rehearse` sets it: that phase never invokes
+	// stalwart-cli, and refusing to run the read-only reconnaissance that
+	// tells an operator what they need - because they don't yet have it -
+	// is backwards. `run` leaves it false, because there the tools are
+	// about to be used and a missing one means stopping a mail server to
+	// find out.
+	ToolCheckAdvisory bool
+	HTTPClient        *http.Client
 }
 
 // Checker runs the preflight checks described in ARCHITECTURE.md §4.1.
@@ -145,6 +153,10 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 	// the service has been stopped is what this exists to prevent.
 	for _, res := range CheckExternalTools(ctx, c.opts.CLIPath, c.opts.PythonPath, crossesBoundary) {
 		result := res
+		if c.opts.ToolCheckAdvisory && result.Status == StatusFail {
+			result.Status = StatusWarn
+			result.Detail = "(advisory for a rehearsal; this would block `run`) " + result.Detail
+		}
 		if _, err := runCheck(result.Name, func() (CheckResult, string) { return result, "" }); err != nil {
 			return report, err
 		}
@@ -303,6 +315,40 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 			Status: StatusWarn,
 			Detail: "no --admin-url configured - skipped; the account/mailbox snapshot validate needs later can't be captured without it",
 		})
+	}
+
+	// Multi-tenancy gate. migrate_v016.py carries the Tenant and the
+	// Domains but leaves every Account's tenantId null, so the apply fails
+	// with invalidForeignKey - and it fails during recovery-mode migration,
+	// which is after the service has been stopped. That is exactly the
+	// shape of failure preflight exists to move earlier.
+	if c.opts.AdminURL != "" && crossesBoundary {
+		if _, err := runCheck("multi-tenancy", func() (CheckResult, string) {
+			client := &stalwartapi.Client{
+				BaseURL: c.opts.AdminURL, Username: c.opts.AdminUser,
+				Password: c.opts.AdminPassword, HTTPClient: c.opts.HTTPClient,
+			}
+			tenants, err := client.TenantNames(ctx)
+			if err != nil {
+				return CheckResult{
+					Status: StatusWarn,
+					Detail: fmt.Sprintf("couldn't determine whether this instance is multi-tenant: %v - if it is, the migration will fail after the service is stopped", err),
+				}, ""
+			}
+			if len(tenants) > 0 {
+				return CheckResult{
+					Status: StatusFail,
+					Detail: fmt.Sprintf("this instance has %d tenant(s) (%s), and Stalwart's migrate_v016.py does not carry tenant "+
+						"membership onto accounts: it creates the Tenant and Domains, then every Account with a null tenantId, and the "+
+						"apply is rejected with invalidForeignKey - during recovery-mode migration, with the service already stopped. "+
+						"Migrate a multi-tenant install by hand, or wait for a converter that handles it",
+						len(tenants), strings.Join(tenants, ", ")),
+				}, ""
+			}
+			return CheckResult{Status: StatusOK, Detail: "single-tenant: no tenant principals, so the conversion's null tenantId is harmless"}, ""
+		}); err != nil {
+			return report, err
+		}
 	}
 
 	rs.Topology = checkpoint.Topology{

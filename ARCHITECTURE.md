@@ -829,6 +829,31 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   - `tenant-admin` has no v0.16 equivalent and is reported as unrestorable
     rather than silently dropped.
 
+- **Multi-tenant installs cannot be migrated by this path, and preflight now
+  refuses them.** A second live attempt on 2026-08-24 got further - preflight
+  clean, binary staged, settings dumped and converted - and then failed
+  during recovery-mode migration, again with the service already stopped:
+
+      created Tenant (1)
+      created Domain (9)
+      create Account restore-13: invalidForeignKey | Object id: Domain#d
+
+  `migrate_v016.py` carries the Tenant and the Domains but leaves every
+  Account's `tenantId` null, so an account references a tenant-owned domain
+  while belonging to no tenant and the foreign key is rejected. This is
+  Stalwart's converter, not this tool, and there is no way around it from
+  here - a multi-tenant install has to be migrated by hand until the
+  converter handles it.
+
+  The tool's failure was in *when* this was discovered. Tenant principals
+  are one API call away and were readable while the server was running, so
+  preflight now queries them (`stalwartapi.Client.TenantNames`) and fails
+  before anything is touched. That is the same lesson as the stalwart-cli
+  check immediately below: both were knowable in advance, and both were
+  found after a production mail server had been stopped. Any future
+  dependency of the *conversion* belongs in preflight, not in the phase that
+  needs it.
+
 - **A live migration attempt failed and cost a restore. Three defects, all
   fixed, all now proven against a reproduction.** On 2026-08-24 a real
   migration stopped a production mail server and then discovered the host's

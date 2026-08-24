@@ -206,3 +206,26 @@ func accountKey(p restPrincipal) string {
 	}
 	return p.Name
 }
+
+// TenantNames returns the tenant principals on a v0.15.x instance.
+//
+// Multi-tenancy has to be detected before a migration starts, because
+// Stalwart's own converter does not survive it: it emits the Tenant and the
+// Domains correctly and then every Account with `tenantId: null`, so the
+// account references a tenant-owned domain while belonging to no tenant and
+// the apply is rejected with `invalidForeignKey`. Observed on a real
+// migration, at the point where the mail server was already stopped.
+func (c *Client) TenantNames(ctx context.Context) ([]string, error) {
+	tenants, err := c.restPrincipals(ctx, "tenant")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(tenants))
+	for _, t := range tenants {
+		if t.Name != "" {
+			names = append(names, t.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
