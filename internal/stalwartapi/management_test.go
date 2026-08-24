@@ -79,6 +79,13 @@ func accountManagementAndMailboxServer(t *testing.T, mailboxesFor map[string][]m
 		methodName := first[0].(string)
 
 		switch methodName {
+		case "x:Domain/query":
+			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+				[]any{"x:Domain/query", map[string]any{"ids": []string{"d1"}}, "q"},
+				[]any{"x:Domain/get", map[string]any{"list": []map[string]any{
+					{"id": "d1", "name": "example.com"},
+				}}, "g"},
+			}})
 		case "x:Account/query":
 			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
 				[]any{"x:Account/query", map[string]any{"ids": []string{"a1", "a2"}}, "q"},

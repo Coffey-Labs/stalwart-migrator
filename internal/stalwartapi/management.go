@@ -179,11 +179,24 @@ func (c *Client) accountSnapshotJMAP(ctx context.Context) (*Snapshot, error) {
 		mailboxCounts[a.Name] = counts
 	}
 
+	// Resolve ids to names so this snapshot is comparable with one taken
+	// from a v0.15 instance, which records names.
+	domainNames, err := c.domainNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("stalwartapi: resolve domain names (an unresolved id would make every domain look missing): %w", err)
+	}
 	domainSet := map[string]bool{}
 	for _, a := range accounts {
-		if a.DomainID != "" {
-			domainSet[a.DomainID] = true
+		if a.DomainID == "" {
+			continue
 		}
+		if name, ok := domainNames[a.DomainID]; ok && name != "" {
+			domainSet[name] = true
+			continue
+		}
+		// Keep the raw id rather than dropping the domain entirely: a
+		// domain that can't be named is still a domain that exists.
+		domainSet[a.DomainID] = true
 	}
 	domains := make([]string, 0, len(domainSet))
 	for d := range domainSet {
@@ -235,6 +248,54 @@ func describeJMAPError(method string, args json.RawMessage) error {
 		return fmt.Errorf("stalwartapi: %s error (%s): %s", method, parsed.Type, parsed.Description)
 	}
 	return fmt.Errorf("stalwartapi: %s error: %s", method, parsed.Type)
+}
+
+// domainNames resolves v0.16 domain ids to domain names.
+//
+// x:Account.domainId is an internal id ("b"), not a name. A pre-migration
+// snapshot taken from a v0.15 instance records domains as names
+// ("smoke.test"), so comparing the two directly reports every domain as
+// having vanished - a false alarm on the check that is supposed to prove
+// nothing was lost.
+//
+// The query and the get travel in one request using a JMAP back-reference
+// (RFC 8620 §3.7), confirmed against a live 0.16.14:
+//
+//	["x:Domain/get", {"list":[{"name":"smoke.test","id":"b"}]}, "g"]
+func (c *Client) domainNames(ctx context.Context) (map[string]string, error) {
+	responses, err := c.call(ctx, managementCapabilities, []any{
+		[]any{"x:Domain/query", map[string]any{"filter": map[string]any{}}, "q"},
+		[]any{"x:Domain/get", map[string]any{
+			"#ids":       map[string]any{"resultOf": "q", "name": "x:Domain/query", "path": "/ids"},
+			"properties": []string{"id", "name"},
+		}, "g"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("stalwartapi: Domain/get: %w", err)
+	}
+	for _, r := range responses {
+		if r.Name == "error" {
+			return nil, describeJMAPError("Domain/get", r.Args)
+		}
+		if r.CallID != "g" {
+			continue
+		}
+		var result struct {
+			List []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"list"`
+		}
+		if err := json.Unmarshal(r.Args, &result); err != nil {
+			return nil, fmt.Errorf("stalwartapi: parse Domain/get response: %w", err)
+		}
+		names := make(map[string]string, len(result.List))
+		for _, d := range result.List {
+			names[d.ID] = d.Name
+		}
+		return names, nil
+	}
+	return nil, fmt.Errorf("stalwartapi: Domain/get returned no matching method response")
 }
 
 func accountQueryIDs(responses []methodResponse) ([]string, error) {

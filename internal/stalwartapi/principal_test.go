@@ -276,3 +276,59 @@ func TestForbiddenExplainsThePostMigrationPermissionTrap(t *testing.T) {
 		}
 	}
 }
+
+// x:Account.domainId is an internal id on v0.16, while a v0.15 snapshot
+// records domain names. Comparing the two directly reported every domain as
+// missing - a false alarm on the check meant to prove nothing was lost.
+func TestAccountSnapshotResolvesDomainIdsToNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/principal" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/.well-known/jmap" {
+			user, _, _ := r.BasicAuth()
+			if strings.Contains(user, "%") {
+				w.WriteHeader(http.StatusForbidden) // no impersonation here
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"apiUrl": "/jmap/"})
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		name := body["methodCalls"].([]any)[0].([]any)[0].(string)
+		switch name {
+		case "x:Domain/query":
+			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+				[]any{"x:Domain/query", map[string]any{"ids": []string{"b"}}, "q"},
+				[]any{"x:Domain/get", map[string]any{"list": []map[string]any{
+					{"id": "b", "name": "smoke.test"},
+				}}, "g"},
+			}})
+		case "x:Account/query":
+			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+				[]any{"x:Account/query", map[string]any{"ids": []string{"e"}}, "q"},
+			}})
+		case "x:Account/get":
+			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+				// domainId is the id, exactly as a real 0.16.14 returns it.
+				[]any{"x:Account/get", map[string]any{"list": []map[string]any{
+					{"id": "e", "name": "alice@smoke.test", "domainId": "b", "usedDiskQuota": 9207},
+				}}, "g"},
+			}})
+		default:
+			t.Errorf("unexpected method call %s", name)
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Username: "sysadmin", Password: "x"}
+	snap, err := client.AccountSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Domains) != 1 || snap.Domains[0] != "smoke.test" {
+		t.Errorf("Domains = %v, want [smoke.test] - ids must be resolved or every domain reads as missing", snap.Domains)
+	}
+}

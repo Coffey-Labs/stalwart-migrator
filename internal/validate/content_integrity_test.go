@@ -60,6 +60,13 @@ func fakeManagementServer(t *testing.T, accounts []map[string]any, mailboxesByEm
 		call := methodCalls[0].([]any)
 		name := call[0].(string)
 		switch name {
+		case "x:Domain/query":
+			json.NewEncoder(w).Encode(jmapEnvelope{MethodResponses: []any{
+				[]any{"x:Domain/query", map[string]any{"ids": []string{"d1"}}, "q"},
+				[]any{"x:Domain/get", map[string]any{"list": []map[string]any{
+					{"id": "d1", "name": "smoke.test"},
+				}}, "g"},
+			}})
 		case "x:Account/query":
 			ids := make([]string, len(accounts))
 			for i, a := range accounts {

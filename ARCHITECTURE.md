@@ -715,12 +715,16 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   far larger blast radius for no benefit. Where v0.15 listed several roles,
   admin wins and the collapse is reported; roles with no v0.16 equivalent
   are named rather than dropped silently.
-- **`x:Account.domainId` returns an internal id on v0.16, not a domain
-  name.** A pre-migration snapshot records domains as names
-  ("smoke.test"); the same instance after migration reports "b". The
-  directory comparison in §4.7 would read that as every domain having
-  vanished. Resolving ids to names needs an `x:Domain/get` call that hasn't
-  been confirmed against the binary yet.
+- **`x:Account.domainId` returns an internal id on v0.16 - resolved.** A
+  pre-migration snapshot records domains as names ("smoke.test"); the same
+  instance afterwards reported "b", so the §4.7 directory comparison would
+  have read every domain as having vanished. The client now resolves ids to
+  names with `x:Domain/query` + `x:Domain/get` in a single request via a
+  JMAP back-reference, confirmed against a live 0.16.14. An id that cannot
+  be resolved is kept as-is rather than dropped, since a domain that can't
+  be named is still a domain that exists; a failure of the resolution call
+  itself is an error, because silently comparing ids against names is the
+  bug this fixes.
 - **Quota recalculation is grounded but unproven.** The `x:Task` wire
   format comes from Stalwart's schema reference rather than a live server;
   §4.5 lists exactly which two details are inferred. A smoke test against a

@@ -79,6 +79,13 @@ func runFakeStalwartServer() {
 			call := methodCalls[0].([]any)
 			name := call[0].(string)
 			switch name {
+			case "x:Domain/query":
+				json.NewEncoder(w).Encode(map[string]any{"methodResponses": []any{
+					[]any{"x:Domain/query", map[string]any{"ids": []string{"d1"}}, "q"},
+					[]any{"x:Domain/get", map[string]any{"list": []map[string]any{
+						{"id": "d1", "name": "example.com"},
+					}}, "g"},
+				}})
 			case "x:Account/query":
 				json.NewEncoder(w).Encode(map[string]any{"methodResponses": []any{
 					[]any{"x:Account/query", map[string]any{"ids": []string{"a1"}}, "q"},
