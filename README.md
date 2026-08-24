@@ -12,9 +12,9 @@ Go, standard library only — no external dependencies.
 
 ## Status
 
-Partially implemented. Roughly 8,800 lines of tested code. Every phase
-except staging now exists as a package, including cutover, but nothing wires
-them into a production run yet, so `run` still refuses.
+Roughly 14,600 lines of Go, stdlib only, of which about 6,300 are tests.
+Every phase exists as a package and `run` wires them into a migration that
+has been performed end to end.
 
 | Command | State |
 |---|---|
@@ -39,17 +39,21 @@ not data volume.
 
 Package state:
 
+Lines are implementation only; each package carries its tests alongside.
+
 | Package | Lines | Tests |
 |---|---|---|
-| `internal/backup` | 1806 | yes |
-| `internal/preflight` | 1329 | yes |
-| `internal/stalwartapi` | 1276 | yes |
-| `internal/cutover` | 1186 | yes |
-| `internal/validate` | 792 | yes |
-| `internal/recovery` | 702 | yes |
-| `internal/checkpoint` | 556 | yes |
-| `internal/service` | 467 | yes |
-| `internal/plan` | 195 | yes |
+| `internal/stalwartapi` | 1456 | yes |
+| `internal/backup` | 1333 | yes |
+| `internal/preflight` | 1035 | yes |
+| `internal/applyplan` | 913 | yes |
+| `internal/cutover` | 784 | yes |
+| `internal/recovery` | 431 | yes |
+| `internal/checkpoint` | 406 | yes |
+| `internal/validate` | 382 | yes |
+| `internal/stage` | 233 | yes |
+| `internal/service` | 201 | yes |
+| `internal/plan` | 130 | yes |
 | `internal/config` | stub | — |
 
 ## Why not a shell script

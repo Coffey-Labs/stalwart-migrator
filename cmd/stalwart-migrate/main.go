@@ -48,7 +48,7 @@ func usage() {
 commands:
   preflight   run read-only checks and print the migration plan
   rehearse    convert this instance's settings and report what will NOT carry over (read-only)
-  run         perform the migration (not implemented yet - refuses)
+  run         perform the migration (needs --yes and --recovery-point-confirmed)
   status      show the state of an in-progress or completed run
-  report      print the validation report for a run`)
+  report      print the validation report for a run (not implemented yet)`)
 }
