@@ -13,6 +13,11 @@ type Status string
 const (
 	StatusOK   Status = "ok"
 	StatusFail Status = "fail"
+	// StatusSkip is a check that could not be performed. It is deliberately
+	// not StatusOK: "every account survived" and "we were unable to look"
+	// are different answers, and reporting the second as the first is the
+	// failure mode ARCHITECTURE.md §4.7 warns about.
+	StatusSkip Status = "skip"
 )
 
 type CheckResult struct {

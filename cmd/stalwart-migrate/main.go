@@ -30,7 +30,7 @@ func main() {
 	case "status":
 		err = runStatus(os.Args[2:])
 	case "report":
-		err = fmt.Errorf("not implemented yet: see internal/validate")
+		err = runReport(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -50,5 +50,5 @@ commands:
   rehearse    convert this instance's settings and report what will NOT carry over (read-only)
   run         perform the migration (needs --yes and --recovery-point-confirmed)
   status      show the state of an in-progress or completed run
-  report      print the validation report for a run (not implemented yet)`)
+  report      print the validation report for a run`)
 }

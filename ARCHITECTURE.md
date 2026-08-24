@@ -340,9 +340,26 @@ no-data-loss guarantee that was not measured. See
 `internal/validate/content_integrity.go`.
 
 
-Runs automatically after cutover; failure here stops the run, reports
-loudly, and exits non-zero, leaving the operator to decide what to restore
-(§4.8).
+Runs automatically after cutover, against the service cutover has just
+started: that is the instance people will actually use — its real config,
+its real ports, under its real service manager — and checking it costs no
+extra downtime, where booting a second copy inside the maintenance window
+would. Failure stops the run, reports loudly, and exits non-zero, leaving
+the operator to decide what to restore (§4.8). The service is deliberately
+left running: by this point the store has been migrated in place, so
+stopping it undoes nothing.
+
+A check that could not be performed is reported as **skipped**, never as a
+pass. Preflight only captures the "before" snapshot when it has an admin URL
+to capture it from, and a run without one has to say it compared nothing
+rather than imply everything survived.
+
+`internal/validate.BootCheck` remains the equivalent for an instance the
+tool boots itself, which is what `rehearse` needs; `run` uses `RunLive`.
+
+Of the checks listed below, what exists today is the account/domain
+comparison. The rest are the intended shape of the suite, not a description
+of it.
 
 - **Version check**: reported server version matches the target exactly.
 - **Auth check**: WebUI login succeeds over the *configured hostname* via

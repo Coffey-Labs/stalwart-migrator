@@ -22,10 +22,11 @@ has been performed end to end.
 | `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
 | `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes` |
 | `stalwart-migrate status <id>` | **Works** |
-| `stalwart-migrate report <id>` | Not implemented |
+| `stalwart-migrate report <id>` | **Works** — prints what validation found for a run |
 
 **`run` performs the migration**, in the order
-preflight → stage → dump → stop → convert → recovery-mode → cutover. It
+preflight → stage → dump → stop → convert → recovery-mode → cutover →
+validate. It
 needs two flags: `--yes` (intent) and `--recovery-point-confirmed` (a claim
 that you have a snapshot or backup you have verified you can restore — this
 tool cannot undo a migration and will not start without it).
@@ -36,6 +37,14 @@ window, and tells you what `run` will and won't carry over.
 Measured on a full migration: the store converts in seconds, and the service
 was down for **6 seconds** end to end. Plan the window around verification,
 not data volume.
+
+After cutover, `run` compares the migrated instance against the snapshot
+preflight took, and fails the command if an account or a domain that existed
+before is missing from it. The service is left running either way — by that
+point the store has been migrated in place, so stopping it would not undo
+anything; your recovery point is the way back. `report <run-id>` prints the
+same finding again later. Where preflight had no admin URL to snapshot from,
+validation reports itself as skipped rather than passed.
 
 Package state:
 

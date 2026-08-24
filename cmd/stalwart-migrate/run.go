@@ -21,6 +21,7 @@ import (
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/recovery"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/stage"
+	"github.com/LINUXexpert-org/stalwart-migrator/internal/validate"
 )
 
 // runRun implements `stalwart-migrate run`: the real migration.
@@ -332,6 +333,24 @@ func runRun(args []string) (err error) {
 	fmt.Print(cutReport.String())
 	if err != nil {
 		return fmt.Errorf("cutover failed: %w", err)
+	}
+
+	fmt.Println("\n--- validate ---")
+	valReport, valErr := validate.RunLive(ctx, store, rs, validate.LiveOptions{
+		AdminURL: *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
+		HTTPClient: httpClient, Before: rs.PreflightSnapshot,
+	})
+	fmt.Print(valReport.String())
+	if valErr != nil {
+		return fmt.Errorf("the migrated service is up, but validation could not complete - check it by hand before "+
+			"treating this migration as done: %w", valErr)
+	}
+	if valReport.Blocking() {
+		// The service is live and serving mail; that is deliberately not
+		// undone here. The operator has the finding and their recovery
+		// point, and only they can weigh one against the other.
+		return fmt.Errorf("the migrated service is up, but accounts or domains from before the migration are missing " +
+			"from it - see the FAIL line above. Your recovery point is the way back; this tool will not undo a migration")
 	}
 
 	fmt.Printf("\nMIGRATION COMPLETE for run %s. Mail was down for %s.\n",
