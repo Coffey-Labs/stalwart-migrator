@@ -209,12 +209,15 @@ func accountKey(p restPrincipal) string {
 
 // TenantNames returns the tenant principals on a v0.15.x instance.
 //
-// Multi-tenancy has to be detected before a migration starts, because
-// Stalwart's own converter does not survive it: it emits the Tenant and the
-// Domains correctly and then every Account with `tenantId: null`, so the
-// account references a tenant-owned domain while belonging to no tenant and
-// the apply is rejected with `invalidForeignKey`. Observed on a real
-// migration, at the point where the mail server was already stopped.
+// Multi-tenancy has to be established before a migration starts. v0.16
+// requires a tenant-scoped account to sit on a domain owned by that same
+// tenant; v0.15 did not, and Stalwart's converter carries the two facts
+// over independently, so an install that is valid today can convert into a
+// plan the new server rejects with `invalidForeignKey` on the Domain
+// reference - during the recovery-mode apply, with the mail server already
+// stopped and the store already at schema v6. See FetchTenantLayout, which
+// builds on this to predict that outcome, and applyplan.ReconcileDomainTenants,
+// which repairs the plan.
 func (c *Client) TenantNames(ctx context.Context) ([]string, error) {
 	tenants, err := c.restPrincipals(ctx, "tenant")
 	if err != nil {

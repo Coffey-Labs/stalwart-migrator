@@ -829,28 +829,66 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   - `tenant-admin` has no v0.16 equivalent and is reported as unrestorable
     rather than silently dropped.
 
-- **Multi-tenant installs cannot be migrated by this path, and preflight now
-  refuses them.** A second live attempt on 2026-08-24 got further - preflight
-  clean, binary staged, settings dumped and converted - and then failed
-  during recovery-mode migration, again with the service already stopped:
+- **A domain and the accounts on it must agree about their tenant in v0.16,
+  and Stalwart's converter does not make them agree.** A second live attempt
+  on 2026-08-24 got further - preflight clean, binary staged, settings dumped
+  and converted - and then failed during recovery-mode migration, again with
+  the service already stopped:
 
       created Tenant (1)
       created Domain (9)
       create Account restore-13: invalidForeignKey | Object id: Domain#d
 
-  `migrate_v016.py` carries the Tenant and the Domains but leaves every
-  Account's `tenantId` null, so an account references a tenant-owned domain
-  while belonging to no tenant and the foreign key is rejected. This is
-  Stalwart's converter, not this tool, and there is no way around it from
-  here - a multi-tenant install has to be migrated by hand until the
-  converter handles it.
+  In v0.15 a domain's tenant and a principal's tenant were independent facts.
+  v0.16 requires a tenant-scoped Account to sit on a Domain owned by that
+  same tenant - for its primary domain and for every alias - and answers
+  `invalidForeignKey` on the Domain reference otherwise. `migrate_v016.py`
+  carries the two facts over independently: `_build_domains` sets a domain's
+  `memberTenantId` only when the domain appears as a declared `domain`
+  principal carrying a `tenant`, while `_build_user` sets the account's from
+  the account's own record. A domain that exists only inside an email address
+  is inferred, gets no tenant, and any tenant-scoped account using it is then
+  rejected.
 
-  The tool's failure was in *when* this was discovered. Tenant principals
-  are one API call away and were readable while the server was running, so
-  preflight now queries them (`stalwartapi.Client.TenantNames`) and fails
-  before anything is touched. That is the same lesson as the stalwart-cli
-  check immediately below: both were knowable in advance, and both were
-  found after a production mail server had been stopped. Any future
+  This was established by reproduction, not inference. A synthetic v0.15
+  principal dump run through the unpatched converter and applied to a real
+  0.16.14 in recovery mode reproduces `invalidForeignKey | Object id:
+  Domain#d` character for character - the `#d` is the server's own object id
+  for the offending domain, not a plan client-id. The same harness shows
+  which directions are actually constrained:
+
+  | account | domain | result |
+  | --- | --- | --- |
+  | tenant-scoped | no tenant | **rejected** |
+  | tenant-scoped | a different tenant | **rejected** |
+  | tenant-scoped | its own tenant | accepted |
+  | global | tenant-owned | accepted |
+
+  Only the first two fail, and only the first is repairable: where a
+  tenant-less domain is used exclusively by accounts of one tenant, giving
+  the domain that tenant is the sole assignment that both applies and keeps
+  every account. `applyplan.ReconcileDomainTenants` does that to the plan
+  between `convert` and `apply`, reports each adoption, and refuses - without
+  modifying anything - when the accounts genuinely disagree, since forcing
+  such a plan through would mean dropping mailboxes. The same fix has been
+  prepared for `migrate_v016.py` upstream; the tool downloads that script
+  rather than vendoring it, so the repair lives here until a released version
+  carries it, and is a no-op on a plan that is already consistent.
+
+  An earlier version of this section claimed the converter emitted every
+  Account with `tenantId: null`. That was wrong: the field is
+  `memberTenantId`, the converter does populate it, and the export had been
+  inspected for a key no version of the script ever writes. Preflight briefly
+  refused every multi-tenant install on the strength of that misreading. The
+  refusal is now narrowed to the arrangements v0.16 truly cannot represent.
+
+  The tool's failure was in *when* this was discovered. Tenant membership
+  is readable while the server is still running, so preflight now maps it
+  (`stalwartapi.Client.FetchTenantLayout`), predicts the outcome with the same
+  rule the server enforces, and either warns about the domains that will adopt
+  a tenant or fails - before anything is touched. That is the same lesson as
+  the stalwart-cli check immediately below: both were knowable in advance, and
+  both were found after a production mail server had been stopped. Any future
   dependency of the *conversion* belongs in preflight, not in the phase that
   needs it.
 

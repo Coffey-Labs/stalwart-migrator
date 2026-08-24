@@ -328,24 +328,46 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 				BaseURL: c.opts.AdminURL, Username: c.opts.AdminUser,
 				Password: c.opts.AdminPassword, HTTPClient: c.opts.HTTPClient,
 			}
-			tenants, err := client.TenantNames(ctx)
+			layout, err := client.FetchTenantLayout(ctx)
 			if err != nil {
 				return CheckResult{
 					Status: StatusWarn,
-					Detail: fmt.Sprintf("couldn't determine whether this instance is multi-tenant: %v - if it is, the migration will fail after the service is stopped", err),
+					Detail: fmt.Sprintf("couldn't map this instance's tenants: %v - if it is multi-tenant, "+
+						"a domain/tenant mismatch would only surface during the conversion", err),
 				}, ""
 			}
-			if len(tenants) > 0 {
+			if len(layout.Tenants) == 0 {
+				return CheckResult{Status: StatusOK, Detail: "single-tenant: no tenant principals, so no account can mismatch its domain"}, ""
+			}
+
+			plan := layout.Analyze()
+			if len(plan.Problems) > 0 {
+				details := make([]string, 0, len(plan.Problems))
+				for _, p := range plan.Problems {
+					details = append(details, fmt.Sprintf("%s: %s", p.Domain, p.Detail))
+				}
 				return CheckResult{
 					Status: StatusFail,
-					Detail: fmt.Sprintf("this instance has %d tenant(s) (%s), and Stalwart's migrate_v016.py does not carry tenant "+
-						"membership onto accounts: it creates the Tenant and Domains, then every Account with a null tenantId, and the "+
-						"apply is rejected with invalidForeignKey - during recovery-mode migration, with the service already stopped. "+
-						"Migrate a multi-tenant install by hand, or wait for a converter that handles it",
-						len(tenants), strings.Join(tenants, ", ")),
+					Detail: fmt.Sprintf("this instance has %d tenant(s) (%s) in an arrangement v0.16 cannot represent - %s. "+
+						"Resolve this in v0.15 first: give each tenant its own domains, or move the accounts into one tenant",
+						len(layout.Tenants), strings.Join(layout.Tenants, ", "), strings.Join(details, "; ")),
 				}, ""
 			}
-			return CheckResult{Status: StatusOK, Detail: "single-tenant: no tenant principals, so the conversion's null tenantId is harmless"}, ""
+			if len(plan.Adoptions) > 0 {
+				return CheckResult{
+					Status: StatusWarn,
+					Detail: fmt.Sprintf("this instance has %d tenant(s) (%s); %d domain(s) (%s) have no tenant of their own but are "+
+						"used only by accounts of a single tenant. v0.16 requires them to match, so the conversion will assign each "+
+						"domain to that tenant - the accounts migrate intact, but those domains become tenant-owned",
+						len(layout.Tenants), strings.Join(layout.Tenants, ", "),
+						len(plan.Adoptions), strings.Join(plan.Adoptions, ", ")),
+				}, ""
+			}
+			return CheckResult{
+				Status: StatusOK,
+				Detail: fmt.Sprintf("%d tenant(s) (%s), and every account already sits on a domain of its own tenant",
+					len(layout.Tenants), strings.Join(layout.Tenants, ", ")),
+			}, ""
 		}); err != nil {
 			return report, err
 		}

@@ -191,7 +191,18 @@ func runRehearse(args []string) (err error) {
 		}); err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
+		// The same domain/tenant repair the real run performs, so a
+		// rehearsal exercises the plan that would actually be applied -
+		// and so an unrepresentable multi-tenant layout is reported here,
+		// with the service still running, rather than during a cutover.
+		tenantFix, err := applyplan.ReconcileDomainTenantsFile(convertedExport)
+		if err != nil {
+			return checkpoint.StepOutcome{}, err
+		}
 		detail := "converted this instance's settings into a v0.16 apply plan"
+		if len(tenantFix.Adoptions) > 0 {
+			detail += " - " + tenantFix.String()
+		}
 		if report, readErr := backup.ReadUnmigratedReport(unmigratedPath); readErr == nil && report != nil {
 			detail += fmt.Sprintf("; %d setting(s) will NOT carry over", report.TotalKeys)
 		}

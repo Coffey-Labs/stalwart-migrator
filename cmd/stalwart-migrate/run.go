@@ -261,10 +261,26 @@ func runRun(args []string) (err error) {
 			}); err != nil {
 				return checkpoint.StepOutcome{}, err
 			}
-			return checkpoint.StepOutcome{Detail: "converted settings into a v0.16 apply plan"}, nil
+			// Repair migrate_v016.py's domain/tenant mismatch before the
+			// plan is ever applied. Left alone it surfaces as
+			// "invalidForeignKey | Object id: Domain#..." partway through
+			// apply - with the old service already stopped and the store
+			// already at schema v6, i.e. at the one point in the run where
+			// there is no way forward and no way back. See
+			// applyplan/tenants.go.
+			tenantFix, err := applyplan.ReconcileDomainTenantsFile(convertedExport)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			detail := "converted settings into a v0.16 apply plan"
+			if len(tenantFix.Adoptions) > 0 {
+				detail += " - " + tenantFix.String()
+			}
+			return checkpoint.StepOutcome{Detail: detail}, nil
 		}); err != nil {
 			return fmt.Errorf("convert settings: %w", err)
 		}
+		fmt.Println(rs.Outcome(checkpoint.PhaseStage, "convert-settings").Detail)
 		unmigrated, readErr := backup.ReadUnmigratedReport(unmigratedPath)
 		if readErr == nil && unmigrated != nil && unmigrated.TotalKeys > 0 {
 			keptWorklist := filepath.Join(runStateDir, "unmigrated.txt")
