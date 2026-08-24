@@ -14,7 +14,6 @@ const (
 	PhaseRecovery  Phase = "recovery"
 	PhaseCutover   Phase = "cutover"
 	PhaseValidate  Phase = "validate"
-	PhaseRollback  Phase = "rollback"
 )
 
 // StepStatus is the lifecycle state of one checkpointed step.
@@ -82,9 +81,8 @@ type PreflightSnapshot struct {
 }
 
 // Topology records how this Stalwart instance is deployed, as detected
-// during preflight, so later phases (cutover, rollback) know whether
-// they're managing a systemd unit or a container and what backend they're
-// dealing with.
+// during preflight, so the cutover phase knows whether it's managing a
+// systemd unit or a container and what backend it's dealing with.
 type Topology struct {
 	DeploymentKind string   `json:"deployment_kind,omitempty"` // "systemd", "docker", "unknown"
 	ClusterNodes   []string `json:"cluster_nodes,omitempty"`
@@ -94,19 +92,18 @@ type Topology struct {
 }
 
 // RunState is the full persisted state of one migration run: everything
-// needed to resume it after a crash, decide whether to roll back, or
-// report on it later. See ARCHITECTURE.md §5.
+// needed to resume it after a crash, or report on it later. See
+// ARCHITECTURE.md §5.
 type RunState struct {
-	RunID                string              `json:"run_id"`
-	SourceVersion        string              `json:"source_version"`
-	TargetVersion        string              `json:"target_version"`
-	CreatedAt            time.Time           `json:"created_at"`
-	UpdatedAt            time.Time           `json:"updated_at"`
-	Topology             Topology            `json:"topology,omitempty"`
-	Steps                []StepRecord        `json:"steps"`
-	Artifacts            map[string]Artifact `json:"artifacts,omitempty"`
-	PreflightSnapshot    *PreflightSnapshot  `json:"preflight_snapshot,omitempty"`
-	RollbackWindowClosed bool                `json:"rollback_window_closed"`
+	RunID             string              `json:"run_id"`
+	SourceVersion     string              `json:"source_version"`
+	TargetVersion     string              `json:"target_version"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
+	Topology          Topology            `json:"topology,omitempty"`
+	Steps             []StepRecord        `json:"steps"`
+	Artifacts         map[string]Artifact `json:"artifacts,omitempty"`
+	PreflightSnapshot *PreflightSnapshot  `json:"preflight_snapshot,omitempty"`
 }
 
 // RecordArtifact stores a content-addressed record of a file this run

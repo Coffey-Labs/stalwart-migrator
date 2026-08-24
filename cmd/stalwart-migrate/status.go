@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 )
@@ -11,9 +12,9 @@ func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory runs are checkpointed in")
 
-	// Same treatment as `rollback`: without this, `status <run-id>
-	// --state-dir X` would look up the run in the default directory and
-	// report it missing, since flag parsing stops at the run-id.
+	// Go's flag package stops parsing at the first positional argument, so
+	// without this `status <run-id> --state-dir X` would look the run up in
+	// the default directory and report it missing.
 	runID, rest := splitRunID(fs, args)
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -49,7 +50,6 @@ func runStatus(args []string) error {
 	fmt.Printf("source: %s\n", rs.SourceVersion)
 	fmt.Printf("target: %s\n", rs.TargetVersion)
 	fmt.Printf("topology: deployment=%s store=%s\n", rs.Topology.DeploymentKind, rs.Topology.StoreBackend)
-	fmt.Printf("rollback window closed: %v\n", rs.RollbackWindowClosed)
 	fmt.Println("steps:")
 	for _, step := range rs.Steps {
 		tag := string(step.Status)
@@ -66,4 +66,46 @@ func runStatus(args []string) error {
 		fmt.Println(line)
 	}
 	return nil
+}
+
+// splitRunID pulls the run-id out of args wherever it appears, so
+// `status <run-id> --state-dir X` works as naturally as
+// `status --state-dir X <run-id>`. Go's flag package stops parsing at the
+// first positional argument, which would otherwise make the obvious
+// invocation order silently drop every flag after the run-id. Tokens
+// consumed as a flag's value are skipped by asking the FlagSet itself which
+// flags take one, rather than by maintaining a second list of them here.
+func splitRunID(fs *flag.FlagSet, args []string) (runID string, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			rest = append(rest, arg)
+			name := strings.TrimLeft(arg, "-")
+			if !strings.Contains(arg, "=") && takesValue(fs, name) && i+1 < len(args) {
+				i++
+				rest = append(rest, args[i])
+			}
+			continue
+		}
+		if runID == "" {
+			runID = arg
+			continue
+		}
+		rest = append(rest, arg) // a second positional: let Parse report it
+	}
+	return runID, rest
+}
+
+func takesValue(fs *flag.FlagSet, name string) bool {
+	f := fs.Lookup(name)
+	if f == nil {
+		return false
+	}
+	boolFlag, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return !ok || !boolFlag.IsBoolFlag()
 }

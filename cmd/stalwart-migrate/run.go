@@ -17,10 +17,11 @@ import (
 )
 
 // runRun implements `stalwart-migrate run`. Only --dry-run is available
-// today: the cutover phase itself (§4.5) isn't built. internal/rollback and
-// internal/service now exist, so the missing piece is no longer "this can't
-// be undone" but "there's nothing here to undo" - see ARCHITECTURE.md §8.
-// `run` without --dry-run refuses rather than doing a migration partway.
+// today. internal/cutover exists, so the gap is no longer a phase but the
+// pipeline around it: §4.3 staging, and the wiring that would drive
+// preflight -> backup -> stage -> recovery-mode -> cutover -> validate
+// against real paths rather than a sandbox. See ARCHITECTURE.md §8. `run`
+// without --dry-run refuses rather than doing a migration partway.
 //
 // --dry-run runs preflight and a real backup (see the caveat printed below
 // about why backup still touches the live data directory), then - if the
@@ -68,10 +69,11 @@ func runRun(args []string) (err error) {
 
 	if !*dryRun {
 		return fmt.Errorf(
-			"real (non-dry-run) migrations aren't available yet: the cutover phase - installing the new binary, rewriting the " +
-				"service definition, and starting the migrated instance for real (ARCHITECTURE.md §4.5) - isn't implemented. " +
-				"Rollback is, so a future cutover will be undoable; there just isn't one to undo yet. Run with --dry-run to " +
-				"validate the migration mechanics against a disposable sandbox copy of your data - nothing in production is touched",
+			"real (non-dry-run) migrations aren't available yet: cutover is implemented (ARCHITECTURE.md §4.5), but nothing wires it " +
+				"into a production run - the staging phase (§4.3) and the real pipeline don't exist yet, so this command has no path " +
+				"that touches production. Run with --dry-run to validate the migration mechanics against a disposable sandbox copy " +
+				"of your data. Note that when a real run does land, recovery from a failed migration will be your own snapshot or " +
+				"backup - this tool does not undo a migration (§4.8)",
 		)
 	}
 	if *adminURL == "" {

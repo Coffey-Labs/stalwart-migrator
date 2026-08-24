@@ -121,13 +121,7 @@ type account struct {
 // exactly what's missing rather than silently treating an unreachable
 // account's mailboxes as having zero messages.
 func (c *Client) AccountSnapshot(ctx context.Context) (*Snapshot, error) {
-	queryResp, err := c.call(ctx, managementCapabilities, []any{
-		[]any{"x:Account/query", map[string]any{"filter": map[string]any{}}, "q"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("stalwartapi: Account/query: %w", err)
-	}
-	ids, err := accountQueryIDs(queryResp)
+	ids, err := c.AccountIDs(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -11,8 +11,8 @@ import (
 // Kind is how a Stalwart instance is run, and therefore how it has to be
 // stopped and started. Preflight detects it (preflight.DetectDeploymentKind
 // is an alias for this type's detector-side constants) and records it in
-// the checkpoint's Topology, so a rollback days later controls the same
-// thing the original run observed rather than re-guessing.
+// the checkpoint's Topology, so a phase running later controls the same
+// thing preflight observed rather than re-guessing.
 type Kind string
 
 const (
@@ -57,9 +57,9 @@ type Controller interface {
 
 // New returns a Controller for the given deployment. It refuses an Unknown
 // (or unrecognized) kind rather than guessing: picking the wrong mechanism
-// here means a rollback that reports "service stopped" while the old
-// instance is still running and holding the data directory open, which is
-// exactly the kind of quiet wrongness this tool exists to avoid.
+// here means a phase that reports "service stopped" while the instance is
+// still running and holding the data directory open, which is exactly the
+// kind of quiet wrongness this tool exists to avoid.
 func New(o Options) (Controller, error) {
 	switch o.Kind {
 	case Systemd:

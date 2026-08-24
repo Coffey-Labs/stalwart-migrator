@@ -9,7 +9,7 @@ import (
 )
 
 // DeploymentKind is how a Stalwart instance appears to be run, which
-// determines how cutover and rollback restart it. It's an alias for
+// determines how cutover restarts it. It's an alias for
 // service.Kind rather than a parallel type: detection here and control
 // there have to agree on the same vocabulary, and one definition can't
 // drift from itself.

@@ -50,8 +50,7 @@ func cmp(a, b int) int {
 
 // PhaseName identifies one phase in an ordered migration plan - the phase
 // packages this names are internal/preflight, internal/backup,
-// internal/recovery, internal/rollback (invoked on failure, not part of the
-// forward list), and internal/validate.
+// internal/recovery, internal/cutover and internal/validate.
 type PhaseName string
 
 const (

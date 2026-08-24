@@ -1,4 +1,4 @@
-package rollback
+package cutover
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ type Status string
 
 const (
 	StatusOK      Status = "ok"
+	StatusWarn    Status = "warn"
 	StatusSkipped Status = "skip"
 	StatusFail    Status = "fail"
 )
@@ -23,9 +24,9 @@ type Report struct {
 	Results []CheckResult
 }
 
-// Blocking reports whether anything failed. A rollback report that isn't
-// clean means the instance is in an unknown state - never quietly "rolled
-// back".
+// Blocking reports whether anything failed outright. A warning does not
+// block: the one step allowed to warn is quota recalculation, which leaves
+// counters stale rather than mail unreachable (see Run).
 func (r Report) Blocking() bool {
 	for _, res := range r.Results {
 		if res.Status == StatusFail {
@@ -38,7 +39,7 @@ func (r Report) Blocking() bool {
 func (r Report) String() string {
 	var b strings.Builder
 	for _, res := range r.Results {
-		fmt.Fprintf(&b, "[%-4s] %-22s %s\n", strings.ToUpper(string(res.Status)), res.Name, res.Detail)
+		fmt.Fprintf(&b, "[%-4s] %-24s %s\n", strings.ToUpper(string(res.Status)), res.Name, res.Detail)
 	}
 	return b.String()
 }

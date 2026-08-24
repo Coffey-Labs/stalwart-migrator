@@ -76,7 +76,8 @@ func TestSystemdStopReportsCommandFailure(t *testing.T) {
 
 // systemctl exits non-zero for every non-active state, so Active has to
 // read its output rather than its exit status - otherwise "inactive", the
-// answer a rollback most needs, would look like a failure to read state.
+// answer a caller waiting for a clean stop most needs, would look like a
+// failure to read the state at all.
 func TestSystemdActiveReadsOutputNotExitStatus(t *testing.T) {
 	for _, tc := range []struct {
 		state    string
