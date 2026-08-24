@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 LINUXexpert-org
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Command stalwart-migrate drives an in-place Stalwart Mail Server upgrade
 // (0.15.5 -> latest) through preflight checks, a defense-in-depth backup,
 // a checkpointed migration, and post-migration validation. Recovery from a
