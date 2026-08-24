@@ -294,7 +294,9 @@ func TestCheckerRunCapturesAccountSnapshotWhenAdminURLSet(t *testing.T) {
 	}
 	checker := New(Options{
 		BinaryPath: binaryPath, ConfigPath: configPath, DataDir: dataDir, TargetVersion: "latest",
-		AdminURL: adminSrv.URL, AdminUser: "admin", AdminPassword: "hunter2",
+		// A directory account, not a config fallback-admin: preflight now
+		// refuses the latter, since it does not survive into v0.16.
+		AdminURL: adminSrv.URL, AdminUser: "alice@example.com", AdminPassword: "hunter2",
 	})
 
 	report, err := checker.Run(context.Background(), store, rs)
@@ -408,4 +410,43 @@ func TestTargetReleaseRejectsAMismatchedLocalBinary(t *testing.T) {
 		}
 	}
 	t.Fatal("no target-release check in the report")
+}
+
+// v0.16 keeps its configuration in the store, so a v0.15
+// [authentication.fallback-admin] simply ceases to exist. Authenticating as
+// one passes every check today and is refused the moment the migration
+// finishes - taking the quota rebuild and the post-migration content
+// comparison with it. Observed on a production clone: the run migrated
+// cleanly and then failed all three post-cutover steps with 401.
+func TestAdminAccountKind(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		admin string
+		want  Status
+	}{
+		{"a directory account survives", "alice@example.com", StatusOK},
+		{"its local part is accepted too", "alice", StatusOK},
+		{"a config fallback-admin does not", "admin", StatusFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := &checkpoint.RunState{PreflightSnapshot: &checkpoint.PreflightSnapshot{
+				UsedQuota: map[string]int64{"alice@example.com": 1, "bob@example.com": 2},
+			}}
+			c := New(Options{AdminUser: tc.admin})
+			res := c.adminAccountKind(rs)
+			if res.Status != tc.want {
+				t.Fatalf("status = %q, want %q (%s)", res.Status, tc.want, res.Detail)
+			}
+			if tc.want == StatusFail && !strings.Contains(res.Detail, "fallback-admin") {
+				t.Fatalf("the operator needs to be told why, got %q", res.Detail)
+			}
+		})
+	}
+}
+
+func TestAdminAccountKindWithoutASnapshot(t *testing.T) {
+	res := New(Options{AdminUser: "admin"}).adminAccountKind(&checkpoint.RunState{})
+	if res.Status != StatusWarn {
+		t.Fatalf("status = %q, want a warning when there was nothing to look in", res.Status)
+	}
 }

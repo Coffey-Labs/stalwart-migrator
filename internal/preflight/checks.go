@@ -331,6 +331,12 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 		}); err != nil {
 			return report, err
 		}
+
+		if _, err := runCheck("admin-account-kind", func() (CheckResult, string) {
+			return c.adminAccountKind(rs), ""
+		}); err != nil {
+			return report, err
+		}
 	} else {
 		report.Results = append(report.Results, CheckResult{
 			Name:   "admin-reachable",
@@ -410,4 +416,32 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 	}
 
 	return report, nil
+}
+
+// adminAccountKind reports whether the account preflight authenticated as
+// still exists after the migration.
+func (c *Checker) adminAccountKind(rs *checkpoint.RunState) CheckResult {
+	if rs.PreflightSnapshot == nil {
+		return CheckResult{Status: StatusWarn, Detail: "no snapshot was captured, so the admin account could not be looked up in the directory"}
+	}
+	// v0.16 keeps its configuration in the store, so the
+	// [authentication.fallback-admin] block a v0.15 config can
+	// define simply ceases to exist. An operator who authenticates
+	// as that admin gets through every check here - it works fine
+	// today - and then finds it rejected the moment the migration
+	// completes, taking the quota rebuild and the post-migration
+	// content comparison with it. Cheaper to say so now.
+	for account := range rs.PreflightSnapshot.UsedQuota {
+		if strings.EqualFold(account, c.opts.AdminUser) {
+			return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("%s is an account in the directory, so it survives the migration", c.opts.AdminUser)}
+		}
+		if local, _, ok := strings.Cut(account, "@"); ok && strings.EqualFold(local, c.opts.AdminUser) {
+			return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("%s matches directory account %s, which survives the migration", c.opts.AdminUser, account)}
+		}
+	}
+	return CheckResult{Status: StatusFail, Detail: fmt.Sprintf(
+		"%s authenticates now but is not an account in this directory - it is a config fallback-admin, and v0.16 keeps its "+
+			"config in the store, so the block defining it does not survive. The migration itself would succeed, then the quota "+
+			"rebuild and the post-migration content check would both be refused with 401. Re-run as an account that exists in "+
+			"the directory (see the README's \"You need a named admin account\")", c.opts.AdminUser)}
 }
