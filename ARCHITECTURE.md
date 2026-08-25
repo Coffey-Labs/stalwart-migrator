@@ -323,6 +323,22 @@ schema-migration flag is set for the target version, and the plan skips
 is intentionally the same engine with a shorter plan, not a separate
 code path, so it doesn't rot independently.
 
+### 4.6a What the converter drops without saying so
+
+`migrate_v016.py` consumes every `acme.*` setting and emits nothing for it,
+and does not list those keys as unmigrated either. The effect is a migration
+that reports complete success while quietly removing certificate renewal: the
+certificate itself carries over, so nothing looks wrong until it expires
+about ninety days later. Observed on a production migration, 2026-08-25.
+
+The supplemental plan already generates what the converter leaves behind for
+listeners (§4.6). An `AcmeProvider` generator belongs alongside it. The
+object shape is known-good, having been applied to a live 0.16.19 server:
+`challengeType` and `renewBefore` are enums (`TlsAlpn01`, `R23`), `contact`
+is a value-keyed set rather than a list, and `accountKey`/`accountUri` are
+server-set and must be omitted — the server registers a fresh ACME account,
+since the v0.15 account key cannot be carried across.
+
 ### 4.7 Post-migration validation
 
 **What this suite can assert depends on the boundary being crossed, and on

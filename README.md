@@ -13,14 +13,23 @@ Go, standard library only — no external dependencies.
 ## Status
 
 Roughly 14,600 lines of Go, stdlib only, of which about 6,300 are tests.
-Every phase exists as a package and `run` wires them into a migration that
-has been performed end to end.
+Every phase exists as a package, and on **2026-08-25 this tool migrated a
+production mail server** — nine domains, six accounts, a 2.4 GB RocksDB
+store — from 0.15.5 to 0.16.19 with **8 seconds** of downtime, every phase
+green including post-cutover validation.
+
+That run was preceded by a full dress rehearsal on a clone of the same
+server, which is the single practice worth copying from this project: it
+found four faults that would each have reached production, three of which
+only appear against a real instance. See [Rehearse on a clone
+first](#rehearse-on-a-clone-first).
 
 | Command | State |
 |---|---|
 | `stalwart-migrate preflight` | **Works** — read-only checks and a migration plan |
 | `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
 | `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes` |
+| `stalwart-migrate tenants` | **Works** — read-only; who owns which domain, and what would block a migration |
 | `stalwart-migrate status <id>` | **Works** |
 | `stalwart-migrate report <id>` | **Works** — prints what validation found for a run |
 
@@ -163,6 +172,54 @@ This replaced an earlier `run --dry-run` that cloned the data directory into
 a sandbox and migrated the copy. That proved the store opens, at the cost of
 copying it twice — while the half that found every real problem needed no
 copy at all. ARCHITECTURE.md §4.9 has the reasoning.
+
+## Rehearse on a clone first
+
+`rehearse` is read-only and stops short of the half that matters: it converts
+your settings but never applies them, and applying is where a real migration
+fails. A clone closes that gap, and on a 2.4 GB store it costs about six
+seconds of production downtime to build.
+
+1. **Copy the data directory with the service stopped.** RocksDB is
+   single-writer, so a hot copy may be torn — and a rehearsal on a torn store
+   fails for reasons production never would, or passes when it should not.
+   Stop, `cp -a` the data dir to the same disk, start again, archive it
+   afterwards; the service is down only for the local copy.
+2. **Give the guest no route off the host.** A clone of a live mail server
+   will otherwise renew certificates for your real domains and deliver
+   whatever is in the outbound queue. In libvirt that means a network with no
+   `<forward>` element. Verify it from inside the guest rather than assuming.
+3. **Run the real thing**: `preflight`, then `run` with `--target-binary`,
+   `--stalwart-cli` and `--migration-script` pointed at locally staged copies,
+   since an isolated guest can download nothing.
+4. **Snapshot the guest while it is shut down**, so a failed attempt costs
+   seconds to reset rather than a rebuild.
+
+What that rehearsal caught, none of which the mock could express: a
+multi-tenant arrangement v0.16 cannot represent; `--target-binary` never
+reaching preflight, so an air-gapped host failed on a release lookup; an
+`admin` account that was a config fallback-admin and stopped working the
+moment the migration finished; and `tenant-admin` roles the converter does
+not restore.
+
+Two things the isolation costs, so they are not mistaken for faults: the
+guest cannot fetch the v0.16 web interface, so `/account/` returns 404, and
+certificate renewal cannot be exercised at all.
+
+## Stalwart's own converter silently drops ACME
+
+`migrate_v016.py` consumes every `acme.*` setting and emits nothing for them.
+They are **not** reported as unmigrated either, so nothing warns you: the
+certificate carries over, the provider that renews it does not, and TLS keeps
+working until the certificate expires roughly ninety days later.
+
+Check for `acme.*` in your dump before migrating, and recreate an
+`AcmeProvider` afterwards if there was one. Note that `accountKey` is
+server-set in v0.16, so the existing ACME account cannot be carried over —
+the server registers a new one on first issuance.
+
+This tool does not yet generate that object for you. It should: the
+supplemental plan already does the equivalent for listeners.
 
 ## You need a named admin account before you migrate
 
