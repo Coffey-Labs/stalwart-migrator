@@ -10,19 +10,46 @@ job](#recovery-is-your-job) before using it on anything you care about.
 
 Go, standard library only — no external dependencies.
 
+**This has been used to migrate a production mail server.** On 2026-08-25 it
+took a live server — nine domains, six accounts, a 2.4 GB RocksDB store —
+from 0.15.5 to 0.16.19 with **8 seconds** of downtime, every phase green
+including post-cutover validation, mail flowing before and after. That run
+was preceded by a full dress rehearsal on a clone of the same server, which
+is the practice this project most recommends copying: see [Rehearse on a
+clone first](#rehearse-on-a-clone-first).
+
+## Before you start: two things you must fix on the server
+
+Neither is something this tool can do for you, and both stop a migration
+dead. `preflight` refuses on both, while the mail server is still running —
+but they are worth knowing before you book a maintenance window, because
+fixing them is a change to your directory, not a flag.
+
+1. **Remove or collapse multi-tenancy.** v0.16 requires a tenant-scoped
+   account to sit on a domain owned by that same tenant, for its primary
+   domain and every alias. v0.15 imposed no such rule, so an install that is
+   perfectly valid today can be unrepresentable in v0.16. Run
+   `stalwart-migrate tenants` to see who owns what. Where a domain has no
+   tenant of its own and only one tenant's accounts use it, the conversion
+   repairs it for you; where two tenants genuinely share a domain, nothing
+   can, and you must resolve it in v0.15 first — give each tenant its own
+   domains, move the accounts into one tenant, or remove the tenants
+   entirely.
+
+2. **Migrate as a directory account, not the built-in admin.** A
+   `[authentication.fallback-admin]` from `config.toml` authenticates
+   perfectly well right up to the moment the migration finishes, and then
+   stops existing — v0.16 keeps its configuration in the store, so the block
+   defining it is never read again. The migration itself still succeeds; what
+   you lose is the ability to verify it, recalculate quotas, or administer
+   the server afterwards. See [You need a named admin
+   account](#you-need-a-named-admin-account-before-you-migrate).
+
 ## Status
 
 Roughly 14,600 lines of Go, stdlib only, of which about 6,300 are tests.
-Every phase exists as a package, and on **2026-08-25 this tool migrated a
-production mail server** — nine domains, six accounts, a 2.4 GB RocksDB
-store — from 0.15.5 to 0.16.19 with **8 seconds** of downtime, every phase
-green including post-cutover validation.
-
-That run was preceded by a full dress rehearsal on a clone of the same
-server, which is the single practice worth copying from this project: it
-found four faults that would each have reached production, three of which
-only appear against a real instance. See [Rehearse on a clone
-first](#rehearse-on-a-clone-first).
+Every phase exists as a package and `run` wires them into the migration
+described above.
 
 | Command | State |
 |---|---|
@@ -76,33 +103,6 @@ Lines are implementation only; each package carries its tests alongside.
 | `internal/service` | 201 | yes |
 | `internal/plan` | 130 | yes |
 | `internal/config` | stub | — |
-
-## Before you start: two things you must fix on the server
-
-Neither is something this tool can do for you, and both stop a migration
-dead. `preflight` refuses on both, while the mail server is still running —
-but they are worth knowing before you book a maintenance window, because
-fixing them is a change to your directory, not a flag.
-
-1. **Remove or collapse multi-tenancy.** v0.16 requires a tenant-scoped
-   account to sit on a domain owned by that same tenant, for its primary
-   domain and every alias. v0.15 imposed no such rule, so an install that is
-   perfectly valid today can be unrepresentable in v0.16. Run
-   `stalwart-migrate tenants` to see who owns what. Where a domain has no
-   tenant of its own and only one tenant's accounts use it, the conversion
-   repairs it for you; where two tenants genuinely share a domain, nothing
-   can, and you must resolve it in v0.15 first — give each tenant its own
-   domains, move the accounts into one tenant, or remove the tenants
-   entirely.
-
-2. **Migrate as a directory account, not the built-in admin.** A
-   `[authentication.fallback-admin]` from `config.toml` authenticates
-   perfectly well right up to the moment the migration finishes, and then
-   stops existing — v0.16 keeps its configuration in the store, so the block
-   defining it is never read again. The migration itself still succeeds; what
-   you lose is the ability to verify it, recalculate quotas, or administer
-   the server afterwards. See [You need a named admin
-   account](#you-need-a-named-admin-account-before-you-migrate).
 
 ## Why not a shell script
 
