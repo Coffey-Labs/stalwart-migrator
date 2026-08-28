@@ -44,7 +44,15 @@ type Options struct {
 	// about to be used and a missing one means stopping a mail server to
 	// find out.
 	ToolCheckAdvisory bool
-	HTTPClient        *http.Client
+	// DeploymentCheckAdvisory downgrades the deployment-kind check from
+	// blocking to advisory, for the same reason as ToolCheckAdvisory.
+	// `rehearse` sets it: it never stops the service or cuts over, so a
+	// deployment this tool cannot cut over is still worth rehearsing
+	// against - the reconnaissance is exactly what tells an operator what
+	// the manual path involves. `run` leaves it false, because there the
+	// alternative is finding out after mail is already down.
+	DeploymentCheckAdvisory bool
+	HTTPClient              *http.Client
 }
 
 // Checker runs the preflight checks described in ARCHITECTURE.md §4.1.
@@ -186,6 +194,20 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 
 	deploymentOutcome, err := runCheck("deployment-kind", func() (CheckResult, string) {
 		kind := DetectDeploymentKind(ctx, c.opts.ContainerName)
+		// Docker has to fail here rather than later. Cutover refuses this
+		// deployment - recreating a container from a new image is not
+		// swapping a binary and rewriting a unit, and this tool does not
+		// automate it - but cutover runs after the service has been
+		// stopped. Refusing there means refusing with mail already down,
+		// which is how a migration attempt turned into an outage.
+		if kind == DeploymentDocker && !c.opts.DeploymentCheckAdvisory {
+			return CheckResult{
+				Status: StatusFail,
+				Detail: "detected deployment kind: docker - this tool cannot cut over a container. " +
+					"Migrating one means pulling the new image and recreating the container, which has to be done by hand; " +
+					"`rehearse` still works and will tell you what the migration involves",
+			}, string(kind)
+		}
 		status := StatusOK
 		if kind == DeploymentUnknown {
 			status = StatusWarn

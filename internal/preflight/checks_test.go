@@ -450,3 +450,95 @@ func TestAdminAccountKindWithoutASnapshot(t *testing.T) {
 		t.Fatalf("status = %q, want a warning when there was nothing to look in", res.Status)
 	}
 }
+
+// withFakeDocker puts a `docker` on PATH that answers `inspect` successfully,
+// so DetectDeploymentKind sees a container without one being involved.
+//
+// It skips rather than fails if this host has a real stalwart systemd unit:
+// detection checks those paths first and would win, and a test that depends
+// on the host *not* having Stalwart installed is a test that fails for a
+// reason unrelated to what it is checking.
+func withFakeDocker(t *testing.T) {
+	t.Helper()
+	for _, p := range systemdUnitPaths {
+		if _, err := os.Stat(p); err == nil {
+			t.Skipf("host has %s, which detection prefers over docker", p)
+		}
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$1\" in inspect) exit 0 ;; esac\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// dockerPreflight runs a minimal but real preflight against a fake 0.15.5
+// install with a fake docker on PATH.
+func dockerPreflight(t *testing.T, advisory bool) Report {
+	t.Helper()
+	withFakeDocker(t)
+
+	counterPath := filepath.Join(t.TempDir(), "invocations")
+	binaryPath := writeFakeBinary(t, "0.15.5", counterPath)
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[server]\nhostname = \"mail.example.com\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withFakeGithub(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(Release{TagName: "v0.16.14"})
+	})
+	store := checkpoint.NewStore(t.TempDir())
+	rs, err := store.Create("", "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ToolCheckAdvisory is on in both cases so the deployment flag is the
+	// only thing that varies: whether stalwart-cli happens to be installed
+	// on the machine running the tests is not what this is testing.
+	report, err := New(Options{
+		BinaryPath: binaryPath, ConfigPath: configPath, DataDir: t.TempDir(),
+		TargetVersion: "latest", ToolCheckAdvisory: true, DeploymentCheckAdvisory: advisory,
+	}).Run(context.Background(), store, rs)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return report
+}
+
+// A container has to be refused here, in preflight, and not later. Cutover
+// already refuses it -- but cutover runs after the service has been stopped,
+// so refusing there refuses with mail down, which turned an attempted
+// migration into an outage.
+func TestPreflightBlocksADockerDeployment(t *testing.T) {
+	report := dockerPreflight(t, false)
+	if !report.Blocking() {
+		t.Fatalf("expected a blocking report for a docker deployment, got:\n%s", report.String())
+	}
+	var found bool
+	for _, res := range report.Results {
+		if res.Name == "deployment-kind" {
+			found = true
+			if res.Status != StatusFail {
+				t.Errorf("deployment-kind status = %q, want %q", res.Status, StatusFail)
+			}
+			if !strings.Contains(res.Detail, "docker") {
+				t.Errorf("deployment-kind detail does not mention docker: %q", res.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no deployment-kind result in report:\n%s", report.String())
+	}
+}
+
+// rehearse is read-only: it never stops anything and never cuts over, so it
+// has to keep working against a container. Telling an operator what the
+// migration involves is most useful precisely when the tool cannot do it for
+// them.
+func TestRehearseStillRunsAgainstADockerDeployment(t *testing.T) {
+	report := dockerPreflight(t, true)
+	if report.Blocking() {
+		t.Fatalf("advisory mode should not block on docker, got:\n%s", report.String())
+	}
+}

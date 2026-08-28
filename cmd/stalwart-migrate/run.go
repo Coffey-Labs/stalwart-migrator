@@ -253,6 +253,41 @@ func runRun(args []string) (err error) {
 	}
 	fmt.Println(controller.Target(), "stopped")
 
+	// Mail is down from here, and every return below is a return with it
+	// still down. Registered after the stop rather than before, so it only
+	// ever restarts something this tool actually stopped.
+	//
+	// It does not pretend to have recovered the migration: a run that
+	// aborted midway is still part-migrated and still needs --resume or the
+	// operator's recovery point. What it prevents is the narrower and worse
+	// outcome of the tool exiting on an error it could see coming while the
+	// server it stopped stays stopped.
+	defer func() {
+		if err == nil {
+			return
+		}
+		// The run's context may already be cancelled - that can be why we
+		// are here - and a cancelled context cannot start anything.
+		restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer cancel()
+		active, activeErr := controller.Active(restartCtx)
+		if activeErr == nil && active {
+			return
+		}
+		fmt.Println("\n--- this run failed with", controller.Target(), "stopped: starting it again ---")
+		if startErr := controller.Start(restartCtx); startErr != nil {
+			fmt.Printf("could not start %s: %v\n", controller.Target(), startErr)
+			fmt.Println("MAIL IS STILL DOWN - start it by hand before anything else.")
+			return
+		}
+		if waitErr := service.WaitFor(restartCtx, controller, true, 2*time.Minute); waitErr != nil {
+			fmt.Printf("%s was asked to start but did not come up: %v\n", controller.Target(), waitErr)
+			fmt.Println("MAIL IS STILL DOWN - check it by hand before anything else.")
+			return
+		}
+		fmt.Println(controller.Target(), "is running again. The migration itself did not complete - see the error below.")
+	}()
+
 	if p.CrossesMajorBoundary {
 		fmt.Println("\n--- convert ---")
 		if _, err := store.RunStep(rs, checkpoint.PhaseStage, "convert-settings", func() (checkpoint.StepOutcome, error) {

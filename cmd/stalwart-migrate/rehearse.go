@@ -113,7 +113,7 @@ func runRehearse(args []string) (err error) {
 		BinaryPath: *binaryPath, ConfigPath: *configPath, DataDir: *dataDir, ContainerName: *containerName,
 		AdminURL: *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
 		TargetVersion: *targetVersion, MinFreeMultiple: *minFree, HTTPClient: httpClient,
-		CLIPath: *stalwartCLI, PythonPath: *pythonPath, ToolCheckAdvisory: true,
+		CLIPath: *stalwartCLI, PythonPath: *pythonPath, ToolCheckAdvisory: true, DeploymentCheckAdvisory: true,
 	})
 	pfReport, err := checker.Run(ctx, store, rs)
 	fmt.Print(pfReport.String())
