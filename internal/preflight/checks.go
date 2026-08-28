@@ -218,6 +218,15 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 		return report, err
 	}
 
+	// The container checks below only mean anything for a container, and
+	// asking docker about one that isn't there would fail for the wrong
+	// reason.
+	if DeploymentKind(deploymentOutcome.Extra) == DeploymentDocker {
+		if err := c.runContainerChecks(ctx, runCheck); err != nil {
+			return report, err
+		}
+	}
+
 	storeOutcome, err := runCheck("store-backend", func() (CheckResult, string) {
 		matches, err := DetectStoreBackends(c.opts.ConfigPath)
 		if err != nil {
