@@ -465,12 +465,10 @@ func withFakeDocker(t *testing.T) {
 			t.Skipf("host has %s, which detection prefers over docker", p)
 		}
 	}
-	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in inspect) exit 0 ;; esac\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// A healthy plain container: not compose-managed, data on a volume.
+	// The container checks inspect it for real now, so an `inspect` that
+	// merely exits 0 would fail them for the wrong reason.
+	fakeInspect(t, inspectDoc(t, nil, []Mount{dataVolume("/opt/stalwart")}))
 }
 
 // dockerPreflight runs a minimal but real preflight against a fake 0.15.5
