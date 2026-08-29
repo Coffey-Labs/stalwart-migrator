@@ -43,6 +43,12 @@ type Options struct {
 	// moved the old binary aside, so this path is normally empty by now.
 	BinaryPath string
 
+	// Container, when set, cuts over a container deployment instead of a
+	// binary and a unit file. Opt-in: a Docker deployment without it is
+	// still refused, so a caller that has not been taught to stage an image
+	// cannot reach a half-built container path by accident.
+	Container *ContainerOptions
+
 	// ServiceUnitPath is the systemd unit to rewrite. ConfigPath, if set,
 	// becomes the unit's --config argument.
 	ServiceUnitPath string
@@ -147,9 +153,19 @@ func BuildPlan(rs *checkpoint.RunState, opts Options) (Plan, error) {
 		kind = service.Kind(rs.Topology.DeploymentKind)
 	}
 	if kind == service.Docker {
-		return p, fmt.Errorf(
-			"cutover: this run's deployment is a Docker container, where cutting over means pulling a new image and recreating the " +
-				"container rather than swapping a binary and rewriting a unit. This tool doesn't automate that - do it by hand")
+		if opts.Container == nil {
+			return p, fmt.Errorf(
+				"cutover: this run's deployment is a Docker container, where cutting over means pulling a new image and recreating the " +
+					"container rather than swapping a binary and rewriting a unit. No container options were given, so there is nothing " +
+					"to recreate it from - stage the target image and pass them, or do it by hand")
+		}
+		if opts.Container.StagedImage == "" {
+			return p, fmt.Errorf("cutover: no staged image to cut over to - stage the target image first")
+		}
+		// The binary checks below are about a file and a unit, neither of
+		// which a container has.
+		p.Target = "docker container " + opts.Container.ContainerName
+		return p, nil
 	}
 	deployment := opts.Deployment
 	deployment.Kind = kind
@@ -229,103 +245,118 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		return nil
 	}
 
-	if err := step("verify-staged-binary", func() (checkpoint.StepOutcome, error) {
-		got, err := preflight.DetectVersion(ctx, plan.StagedBinaryPath)
-		if err != nil {
-			return checkpoint.StepOutcome{}, fmt.Errorf("couldn't read the staged binary's version: %w", err)
+	// A container is replaced rather than edited, so none of the binary
+	// path applies: there is no file to install and no unit to rewrite.
+	// What follows either branch - confirming it answers, and the quota
+	// recalculation - is the same question whatever started it.
+	if opts.Container != nil {
+		if err := runContainerCutover(ctx, rs, step, *opts.Container); err != nil {
+			return report, err
 		}
-		if rs.TargetVersion != "" && got != rs.TargetVersion {
-			return checkpoint.StepOutcome{}, fmt.Errorf(
-				"staged binary %s reports version %s, but this run targets %s - installing it would migrate to a version nobody planned for",
-				plan.StagedBinaryPath, got, rs.TargetVersion)
+		if err := step("wait-running", func() (checkpoint.StepOutcome, error) {
+			if err := service.WaitFor(ctx, controller, true, startTimeoutOr(opts)); err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("%s is running the migrated instance", controller.Target())}, nil
+		}); err != nil {
+			return report, err
 		}
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("staged binary %s reports %s, matching this run's target", plan.StagedBinaryPath, got), Extra: got}, nil
-	}); err != nil {
-		return report, err
-	}
+	} else {
+		if err := step("verify-staged-binary", func() (checkpoint.StepOutcome, error) {
+			got, err := preflight.DetectVersion(ctx, plan.StagedBinaryPath)
+			if err != nil {
+				return checkpoint.StepOutcome{}, fmt.Errorf("couldn't read the staged binary's version: %w", err)
+			}
+			if rs.TargetVersion != "" && got != rs.TargetVersion {
+				return checkpoint.StepOutcome{}, fmt.Errorf(
+					"staged binary %s reports version %s, but this run targets %s - installing it would migrate to a version nobody planned for",
+					plan.StagedBinaryPath, got, rs.TargetVersion)
+			}
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("staged binary %s reports %s, matching this run's target", plan.StagedBinaryPath, got), Extra: got}, nil
+		}); err != nil {
+			return report, err
+		}
 
-	if err := step("install-binary", func() (checkpoint.StepOutcome, error) {
-		sum, size, err := installBinary(plan.StagedBinaryPath, plan.BinaryPath)
-		if err != nil {
-			return checkpoint.StepOutcome{}, err
+		if err := step("install-binary", func() (checkpoint.StepOutcome, error) {
+			sum, size, err := installBinary(plan.StagedBinaryPath, plan.BinaryPath)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			rs.RecordArtifact(ArtifactNewBinary, checkpoint.Artifact{Path: plan.BinaryPath, SHA256: sum, SizeBytes: size})
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%d bytes)", plan.StagedBinaryPath, plan.BinaryPath, size)}, nil
+		}); err != nil {
+			return report, err
 		}
-		rs.RecordArtifact(ArtifactNewBinary, checkpoint.Artifact{Path: plan.BinaryPath, SHA256: sum, SizeBytes: size})
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%d bytes)", plan.StagedBinaryPath, plan.BinaryPath, size)}, nil
-	}); err != nil {
-		return report, err
-	}
 
-	if err := step("install-config", func() (checkpoint.StepOutcome, error) {
-		if plan.ConfigSource == "" {
+		if err := step("install-config", func() (checkpoint.StepOutcome, error) {
+			if plan.ConfigSource == "" {
+				return checkpoint.StepOutcome{
+					Verdict: string(StatusSkipped),
+					Detail:  "no converted config to install - the unit is repointed at whatever is already at ConfigPath",
+				}, nil
+			}
+			owner, err := installConfig(plan.ConfigSource, plan.ConfigPath, opts.ConfigOwnerReference)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%s)", plan.ConfigSource, plan.ConfigPath, owner)}, nil
+		}); err != nil {
+			return report, err
+		}
+
+		if err := step("update-service-definition", func() (checkpoint.StepOutcome, error) {
+			preserved, err := preserveUnit(plan.ServiceUnitPath, rs.RunID)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			sum, size, err := hashFile(preserved)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			// Recorded before the rewrite, so a crash between preserving and
+			// rewriting still leaves the original findable.
+			rs.RecordArtifact(ArtifactServiceUnit, checkpoint.Artifact{Path: preserved, SHA256: sum, SizeBytes: size})
+
+			original, err := os.ReadFile(preserved)
+			if err != nil {
+				return checkpoint.StepOutcome{}, fmt.Errorf("cutover: read preserved unit %s: %w", preserved, err)
+			}
+			rewritten, err := RewriteUnit(string(original), plan.BinaryPath, plan.ConfigPath)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			if err := writeFileAtomic(plan.ServiceUnitPath, []byte(rewritten), 0o644); err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
 			return checkpoint.StepOutcome{
-				Verdict: string(StatusSkipped),
-				Detail:  "no converted config to install - the unit is repointed at whatever is already at ConfigPath",
+				Detail: fmt.Sprintf("pointed %s at %s; the original is preserved at %s", plan.ServiceUnitPath, plan.BinaryPath, preserved),
+				Extra:  preserved,
 			}, nil
+		}); err != nil {
+			return report, err
 		}
-		owner, err := installConfig(plan.ConfigSource, plan.ConfigPath, opts.ConfigOwnerReference)
-		if err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("installed %s as %s (%s)", plan.ConfigSource, plan.ConfigPath, owner)}, nil
-	}); err != nil {
-		return report, err
-	}
 
-	if err := step("update-service-definition", func() (checkpoint.StepOutcome, error) {
-		preserved, err := preserveUnit(plan.ServiceUnitPath, rs.RunID)
-		if err != nil {
-			return checkpoint.StepOutcome{}, err
+		if err := step("reload-service-definition", func() (checkpoint.StepOutcome, error) {
+			if err := controller.ReloadConfig(ctx); err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			return checkpoint.StepOutcome{Detail: "service manager re-read the updated definition"}, nil
+		}); err != nil {
+			return report, err
 		}
-		sum, size, err := hashFile(preserved)
-		if err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		// Recorded before the rewrite, so a crash between preserving and
-		// rewriting still leaves the original findable.
-		rs.RecordArtifact(ArtifactServiceUnit, checkpoint.Artifact{Path: preserved, SHA256: sum, SizeBytes: size})
 
-		original, err := os.ReadFile(preserved)
-		if err != nil {
-			return checkpoint.StepOutcome{}, fmt.Errorf("cutover: read preserved unit %s: %w", preserved, err)
+		startTimeout := startTimeoutOr(opts)
+		if err := step("start-service", func() (checkpoint.StepOutcome, error) {
+			if err := controller.Start(ctx); err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			if err := service.WaitFor(ctx, controller, true, startTimeout); err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("%s is running the migrated instance", controller.Target())}, nil
+		}); err != nil {
+			return report, err
 		}
-		rewritten, err := RewriteUnit(string(original), plan.BinaryPath, plan.ConfigPath)
-		if err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		if err := writeFileAtomic(plan.ServiceUnitPath, []byte(rewritten), 0o644); err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		return checkpoint.StepOutcome{
-			Detail: fmt.Sprintf("pointed %s at %s; the original is preserved at %s", plan.ServiceUnitPath, plan.BinaryPath, preserved),
-			Extra:  preserved,
-		}, nil
-	}); err != nil {
-		return report, err
-	}
-
-	if err := step("reload-service-definition", func() (checkpoint.StepOutcome, error) {
-		if err := controller.ReloadConfig(ctx); err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		return checkpoint.StepOutcome{Detail: "service manager re-read the updated definition"}, nil
-	}); err != nil {
-		return report, err
-	}
-
-	startTimeout := opts.StartTimeout
-	if startTimeout <= 0 {
-		startTimeout = 60 * time.Second
-	}
-	if err := step("start-service", func() (checkpoint.StepOutcome, error) {
-		if err := controller.Start(ctx); err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		if err := service.WaitFor(ctx, controller, true, startTimeout); err != nil {
-			return checkpoint.StepOutcome{}, err
-		}
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("%s is running the migrated instance", controller.Target())}, nil
-	}); err != nil {
-		return report, err
 	}
 
 	healthTimeout := opts.HealthTimeout
@@ -586,4 +617,13 @@ func installConfig(src, dst, reference string) (ownership string, err error) {
 		return fmt.Sprintf("uid %d, gid %d, mode %v", uid, gid, perm), nil
 	}
 	return fmt.Sprintf("mode %v, ownership unchanged (no reference file to copy it from)", perm), nil
+}
+
+// startTimeoutOr is the wait for the service to come up, defaulted. Shared
+// because both branches wait for the same thing.
+func startTimeoutOr(opts Options) time.Duration {
+	if opts.StartTimeout > 0 {
+		return opts.StartTimeout
+	}
+	return 60 * time.Second
 }

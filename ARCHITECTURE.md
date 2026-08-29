@@ -290,9 +290,28 @@ against an already-migrated store.
 - The original unit is preserved and recorded as the `service-unit`
   artifact *before* the rewrite, so an operator restoring by hand isn't
   reconstructing a unit file from memory.
-- Docker deployments are refused: cutting over a container means pulling a
-  new image and recreating the container, not swapping a binary and
-  rewriting a unit.
+- Docker deployments recreate rather than rewrite, because a container
+  cannot be edited in place the way a unit file can. That makes silent loss
+  the default failure: a container rebuilt without its capabilities, its
+  custom network or its device mappings starts cleanly and is quietly not
+  the server it was. So the same rule the unit rewrite follows applies
+  here - a definition this only partly understands is one it must not
+  rebuild - and cutover refuses a container using anything outside the set
+  it carries across, naming what it found. The list is conservative and
+  deliberately not exhaustive; docker's HostConfig has far more fields than
+  it checks, and one it does not know about is a reason not to be
+  recreating that container at all.
+- The old container is renamed rather than removed, and the old image is
+  never pruned. Together they are the container's manual restore path, the
+  nearest equivalent to the preserved binary of §4.2: one command starts
+  the previous container again. The `docker inspect` of the container as it
+  was is preserved as the `container-definition` artifact before anything
+  is replaced, for the same reason the unit file is.
+- **Status: the container path is implemented and not yet reachable from
+  the CLI** - `run` does not pass container options, so a container is
+  still refused there. Wiring it up, and lifting preflight's refusal for
+  the containers it can now handle, is the remaining work in
+  [#3](https://github.com/LINUXexpert-org/stalwart-migrator/issues/3).
 - Quota recalculation is the one step allowed to fail without failing the
   phase. Stale counters are an accounting problem; a failed cutover is one
   an operator has to respond to by restoring a machine that is otherwise
@@ -815,9 +834,16 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   §4.5 lists exactly which two details are inferred. A smoke test against a
   real 0.16 instance would settle both, and would let this step be promoted
   from "warns on failure" to a hard check.
-- **Cutover doesn't handle Docker.** It refuses container deployments
-  outright, since cutting one over means pulling an image and recreating
-  the container rather than swapping a binary and rewriting a unit.
+- **Docker is implemented but not yet wired to the CLI.** Preflight
+  inspects a container and reports what stands in the way; stage pulls and
+  verifies an image; the recovery cycle runs in a throwaway container
+  against the live data; and cutover recreates the container, refusing one
+  whose definition it would not carry across intact. What is missing is
+  `run` passing those options and preflight lifting its refusal for the
+  containers now handled. Compose stays refused deliberately: recreating a
+  compose-managed container out from under compose leaves the container and
+  the compose file disagreeing, and the next `compose up` reverts the
+  migration.
 - **Cutover ignores systemd drop-ins.** It rewrites only the main unit
   file, so an `ExecStart` or `Environment` override in
   `/etc/systemd/system/stalwart.service.d/*.conf` is invisible to it -
