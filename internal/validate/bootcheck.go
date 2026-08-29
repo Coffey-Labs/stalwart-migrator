@@ -29,6 +29,10 @@ type BootCheckOptions struct {
 	StopGrace  time.Duration
 	HTTPClient *http.Client
 
+	// Launcher starts the instance this boots. Nil means BinaryPath as a
+	// child process - see recovery.Launcher.
+	Launcher recovery.Launcher
+
 	// ContentIntegrityBefore, if non-nil, is the pre-migration snapshot
 	// preflight captured (checkpoint.RunState.PreflightSnapshot). When set,
 	// BootCheck captures a fresh snapshot from the instance it just booted
@@ -59,10 +63,14 @@ type BootCheckOptions struct {
 // so a retry just redoes the whole cycle - see recovery.Run's doc comment
 // for the full reasoning, which applies identically here.
 func BootCheck(ctx context.Context, o BootCheckOptions) (detail string, result *ContentIntegrityResult, err error) {
-	proc := &recovery.Process{}
-	if startErr := proc.Start(ctx, recovery.ProcessOptions{
-		BinaryPath: o.BinaryPath, ConfigPath: o.ConfigPath, RecoveryMode: false, ExtraEnv: o.ExtraEnv,
-	}); startErr != nil {
+	launcher := o.Launcher
+	if launcher == nil {
+		launcher = recovery.BinaryLauncher{BinaryPath: o.BinaryPath}
+	}
+	proc, startErr := launcher.Launch(ctx, recovery.LaunchOptions{
+		ConfigPath: o.ConfigPath, RecoveryMode: false, ExtraEnv: o.ExtraEnv,
+	})
+	if startErr != nil {
 		return "", nil, fmt.Errorf("validate: start normal boot: %w", startErr)
 	}
 
