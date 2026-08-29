@@ -114,11 +114,21 @@ func (p *Process) Start(ctx context.Context, o ProcessOptions) error {
 
 	cmd := exec.CommandContext(ctx, o.BinaryPath, "--config", o.ConfigPath)
 	cmd.Env = append(os.Environ(), env...)
+	return p.start(cmd, o.BinaryPath)
+}
+
+// start attaches the output buffer and launches cmd. Split out of Start so
+// a deployment that runs the target version some other way - a container,
+// where the child is `docker run` rather than the server itself - gets the
+// same supervision: the same captured output, and the same Stop.
+//
+// what names the thing being started, for the error if it will not.
+func (p *Process) start(cmd *exec.Cmd, what string) error {
 	p.output = &outputBuffer{}
 	cmd.Stdout = p.output
 	cmd.Stderr = p.output
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("recovery: start %s: %w", o.BinaryPath, err)
+		return fmt.Errorf("recovery: start %s: %w", what, err)
 	}
 	p.cmd = cmd
 	return nil
