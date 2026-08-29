@@ -45,6 +45,23 @@ type ContainerFacts struct {
 	Labels  map[string]string
 	Mounts  []Mount
 	Running bool
+
+	// The rest is what cutover would have to carry across when it recreates
+	// the container. Recreating is the container equivalent of rewriting a
+	// unit file, except that a unit can be edited in place and a container
+	// cannot - so anything not carried here is silently dropped, which is
+	// the failure UnsupportedForRecreate exists to prevent.
+	Env           []string
+	Ports         map[string][]PortBinding
+	RestartPolicy string
+	NetworkMode   string
+	Unsupported   []string // populated by UnsupportedForRecreate
+}
+
+// PortBinding is one published port.
+type PortBinding struct {
+	HostIP   string `json:"HostIp"`
+	HostPort string `json:"HostPort"`
 }
 
 // ComposeProject returns the compose project managing this container, or
@@ -95,11 +112,37 @@ type inspectOutput struct {
 	Config struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
+		Env    []string          `json:"Env"`
+		User   string            `json:"User"`
 	} `json:"Config"`
 	State struct {
 		Running bool `json:"Running"`
 	} `json:"State"`
-	Mounts []Mount `json:"Mounts"`
+	Mounts     []Mount `json:"Mounts"`
+	HostConfig struct {
+		PortBindings  map[string][]PortBinding `json:"PortBindings"`
+		RestartPolicy struct {
+			Name string `json:"Name"`
+		} `json:"RestartPolicy"`
+		NetworkMode string            `json:"NetworkMode"`
+		CapAdd      []string          `json:"CapAdd"`
+		CapDrop     []string          `json:"CapDrop"`
+		Devices     []any             `json:"Devices"`
+		Sysctls     map[string]string `json:"Sysctls"`
+		Ulimits     []any             `json:"Ulimits"`
+		Privileged  bool              `json:"Privileged"`
+		ExtraHosts  []string          `json:"ExtraHosts"`
+		DNS         []string          `json:"Dns"`
+		GroupAdd    []string          `json:"GroupAdd"`
+		SecurityOpt []string          `json:"SecurityOpt"`
+		Tmpfs       map[string]string `json:"Tmpfs"`
+		LogConfig   struct {
+			Type string `json:"Type"`
+		} `json:"LogConfig"`
+	} `json:"HostConfig"`
+	NetworkSettings struct {
+		Networks map[string]any `json:"Networks"`
+	} `json:"NetworkSettings"`
 }
 
 // InspectContainer reads the facts about containerName. An error here is
@@ -123,14 +166,70 @@ func InspectContainer(ctx context.Context, containerName string) (ContainerFacts
 		return ContainerFacts{}, fmt.Errorf("preflight: docker inspect %s returned no container", containerName)
 	}
 	c := got[0]
-	return ContainerFacts{
-		Name:    strings.TrimPrefix(c.Name, "/"),
-		Image:   c.Config.Image,
-		ImageID: c.Image,
-		Labels:  c.Config.Labels,
-		Mounts:  c.Mounts,
-		Running: c.State.Running,
-	}, nil
+	f := ContainerFacts{
+		Name:          strings.TrimPrefix(c.Name, "/"),
+		Image:         c.Config.Image,
+		ImageID:       c.Image,
+		Labels:        c.Config.Labels,
+		Mounts:        c.Mounts,
+		Running:       c.State.Running,
+		Env:           c.Config.Env,
+		Ports:         c.HostConfig.PortBindings,
+		RestartPolicy: c.HostConfig.RestartPolicy.Name,
+		NetworkMode:   c.HostConfig.NetworkMode,
+	}
+	f.Unsupported = unsupportedForRecreate(c)
+	return f, nil
+}
+
+// unsupportedForRecreate names every piece of this container's
+// configuration that recreating it would not carry across.
+//
+// Cutover recreates rather than edits, because a container cannot be edited
+// in place the way a unit file can. That makes silent loss the default
+// failure: a container recreated without its capabilities, its custom
+// network or its device mappings starts cleanly and is quietly not the
+// server it was. §4.5 already refuses to edit a unit line it only partly
+// understands; this is the same rule, applied where the whole definition
+// has to be rebuilt.
+//
+// The list is deliberately conservative and deliberately not exhaustive -
+// docker's HostConfig has far more fields than these. It names the ones a
+// mail server plausibly uses, and anything it does not know about is a
+// reason this tool should not be recreating that container at all.
+func unsupportedForRecreate(c inspectOutput) []string {
+	var out []string
+	add := func(cond bool, what string) {
+		if cond {
+			out = append(out, what)
+		}
+	}
+	h := c.HostConfig
+	add(len(h.CapAdd) > 0, "added capabilities (--cap-add)")
+	add(len(h.CapDrop) > 0, "dropped capabilities (--cap-drop)")
+	add(len(h.Devices) > 0, "device mappings (--device)")
+	add(len(h.Sysctls) > 0, "sysctls (--sysctl)")
+	add(len(h.Ulimits) > 0, "ulimits (--ulimit)")
+	add(h.Privileged, "privileged mode (--privileged)")
+	add(len(h.ExtraHosts) > 0, "extra hosts (--add-host)")
+	add(len(h.DNS) > 0, "custom DNS (--dns)")
+	add(len(h.GroupAdd) > 0, "supplementary groups (--group-add)")
+	add(len(h.SecurityOpt) > 0, "security options (--security-opt)")
+	add(len(h.Tmpfs) > 0, "tmpfs mounts (--tmpfs)")
+	add(h.LogConfig.Type != "" && h.LogConfig.Type != "json-file", "a non-default log driver (--log-driver "+h.LogConfig.Type+")")
+	add(c.Config.User != "", "a container user (--user "+c.Config.User+")")
+
+	// A user-defined network is a name in NetworkSettings.Networks that is
+	// not one of docker's built-ins. Recreating without it puts the server
+	// somewhere nothing else can reach it.
+	for name := range c.NetworkSettings.Networks {
+		switch name {
+		case "bridge", "host", "none":
+		default:
+			out = append(out, "a user-defined network ("+name+")")
+		}
+	}
+	return out
 }
 
 // runContainerChecks adds the checks that only apply to a container. They
