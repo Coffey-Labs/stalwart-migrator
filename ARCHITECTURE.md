@@ -834,16 +834,26 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   §4.5 lists exactly which two details are inferred. A smoke test against a
   real 0.16 instance would settle both, and would let this step be promoted
   from "warns on failure" to a hard check.
-- **Docker is implemented but not yet wired to the CLI.** Preflight
-  inspects a container and reports what stands in the way; stage pulls and
-  verifies an image; the recovery cycle runs in a throwaway container
-  against the live data; and cutover recreates the container, refusing one
-  whose definition it would not carry across intact. What is missing is
-  `run` passing those options and preflight lifting its refusal for the
-  containers now handled. Compose stays refused deliberately: recreating a
-  compose-managed container out from under compose leaves the container and
-  the compose file disagreeing, and the next `compose up` reverts the
-  migration.
+- **Docker is wired end to end and has never met a real Stalwart image.**
+  Preflight inspects a container and blocks on what stands in the way;
+  stage pulls and verifies an image; the recovery cycle runs in a throwaway
+  container against the live data; cutover recreates the container,
+  refusing one whose definition it would not carry across intact. Every
+  test drives a fake `docker`, which proves the right commands are
+  assembled and proves nothing about whether the image reads the config it
+  is handed - the same limit §4.8 records about the deleted rollback code,
+  and the reason `run` refuses a container without
+  `--container-path-unproven`. A rehearsal on a clone, then a real
+  migration, is what would retire that flag.
+  Compose stays refused deliberately: recreating a compose-managed
+  container out from under compose leaves the container and the compose
+  file disagreeing, and the next `compose up` reverts the migration.
+- **The converted config reaches a container through the data volume.**
+  `run` writes it under the host side of whichever mount covers
+  `--data-dir` and names it on the container side, because cutover recreates
+  a container with the mounts it had and cannot invent a new one for a
+  config file. That is an inference from how the mounts must line up rather
+  than something a real deployment has confirmed.
 - **Cutover ignores systemd drop-ins.** It rewrites only the main unit
   file, so an `ExecStart` or `Environment` override in
   `/etc/systemd/system/stalwart.service.d/*.conf` is invisible to it -

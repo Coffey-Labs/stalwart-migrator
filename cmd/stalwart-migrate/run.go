@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -61,6 +62,9 @@ func runRun(args []string) (err error) {
 		"admin password (or set STALWART_MIGRATE_ADMIN_PASSWORD)")
 	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
 	targetBinary := fs.String("target-binary", "", "use an already-downloaded target binary instead of fetching one")
+	targetImage := fs.String("target-image", "", "for a container deployment: the target image, named in full "+
+		"(e.g. stalwartlabs/stalwart:v0.16.14). Never guessed from the running container - a derived tag is wrong for a "+
+		"digest-pinned image, a mirror or a fork")
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")
 	workDir := fs.String("work-dir", "/var/lib/stalwart-migrator/work", "scratch directory")
 	pythonPath := fs.String("python", "python3", "path to python3")
@@ -73,6 +77,10 @@ func runRun(args []string) (err error) {
 	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward")
 	resume := fs.String("resume", "", "resume an interrupted run by id instead of starting a new one (see `status` for ids)")
 	yes := fs.Bool("yes", false, "actually perform the migration")
+	containerUnproven := fs.Bool("container-path-unproven", false,
+		"acknowledge that the container migration path has never been run against a real Stalwart image. Its logic is "+
+			"tested and its refusals are real, but a fake docker proves only that the right commands are assembled - not that "+
+			"the image reads the config it is handed. Required for a container deployment")
 	recoveryConfirmed := fs.Bool("recovery-point-confirmed", false,
 		"confirm you have a snapshot or backup you have verified you can restore - this tool cannot undo a migration")
 	if err := fs.Parse(args); err != nil {
@@ -174,22 +182,79 @@ func runRun(args []string) (err error) {
 	}
 	fmt.Printf("\nplan: %s\n", p.Reason)
 
+	// Preflight recorded how this deployment is run, and from here the two
+	// differ in three places: what gets staged, what the recovery cycle
+	// launches, and what cutover replaces. Everything between them is the
+	// same migration.
+	isContainer := service.Kind(rs.Topology.DeploymentKind) == service.Docker
+	var containerFacts preflight.ContainerFacts
+	if isContainer {
+		if !*containerUnproven {
+			return fmt.Errorf(
+				"refusing to start: this is a container deployment, and that path has never been run against a real Stalwart " +
+					"image. Its logic is tested and its refusals are real, but a fake docker proves only that the right commands " +
+					"are assembled, not that the image reads the config it is handed. Pass --container-path-unproven if you " +
+					"accept that, ideally against a clone of production first")
+		}
+		if *targetImage == "" {
+			return fmt.Errorf("refusing to start: a container deployment needs --target-image; it is never guessed from the running container")
+		}
+		if containerFacts, err = preflight.InspectContainer(ctx, *containerName); err != nil {
+			return err
+		}
+	}
+
 	fmt.Println("\n--- stage ---")
 	staged := *targetBinary
-	if staged == "" {
+	stagedImage := ""
+	switch {
+	case isContainer:
+		img, err := stage.RunImage(ctx, store, rs, stage.ImageOptions{
+			Image: *targetImage, TargetVersion: rs.TargetVersion,
+		})
+		if err != nil {
+			return fmt.Errorf("stage: %w", err)
+		}
+		stagedImage = img.Ref
+		fmt.Println(rs.Outcome(checkpoint.PhaseStage, "stage-image").Detail)
+	case staged == "":
 		staged = filepath.Join(runWorkDir, "stalwart-"+rs.TargetVersion)
 		if staged, err = stage.Run(ctx, store, rs, stage.Options{
 			TargetVersion: *targetVersion, DestPath: staged, SHA256: *binarySHA, HTTPClient: httpClient,
 		}); err != nil {
 			return fmt.Errorf("stage: %w", err)
 		}
+		fmt.Println(rs.Outcome(checkpoint.PhaseStage, "stage-binary").Detail)
+	default:
+		fmt.Println("using the already-staged binary at", staged)
 	}
-	fmt.Println(rs.Outcome(checkpoint.PhaseStage, "stage-binary").Detail)
 
 	script := filepath.Join(runWorkDir, "migrate_v016.py")
 	settingsPath := filepath.Join(runWorkDir, "settings.json")
 	principalsPath := filepath.Join(runWorkDir, "principals.json")
+	// The converted config has to be readable by whatever boots next. For a
+	// binary that is any path on this host; for a container it has to be
+	// somewhere the container already mounts, because cutover recreates it
+	// with the mounts it had and cannot invent a new one. So it goes inside
+	// the data volume, written on the host side and named on the container
+	// side.
 	convertedConfig := filepath.Join(runWorkDir, "config.json")
+	containerConfigPath := ""
+	if isContainer {
+		mount, ok := containerFacts.MountFor(*dataDir)
+		if !ok {
+			return fmt.Errorf(
+				"refusing to start: --data-dir %s is not covered by any of %s's mounts (%s). For a container it must name the "+
+					"path *inside* the container, since that is where its data actually lives",
+				*dataDir, *containerName, preflight.DescribeMounts(containerFacts.Mounts))
+		}
+		hostDir := filepath.Join(mount.Source, "stalwart-migrate")
+		if err := os.MkdirAll(hostDir, 0o750); err != nil {
+			return fmt.Errorf("create %s (the host side of %s): %w", hostDir, mount.Destination, err)
+		}
+		convertedConfig = filepath.Join(hostDir, "config.json")
+		containerConfigPath = path.Join(mount.Destination, "stalwart-migrate", "config.json")
+	}
 	convertedExport := filepath.Join(runWorkDir, "export.json")
 	unmigratedPath := filepath.Join(runWorkDir, "unmigrated.txt")
 	supplementPath := filepath.Join(runWorkDir, "supplement.json")
@@ -338,12 +403,32 @@ func runRun(args []string) (err error) {
 		}
 
 		fmt.Println("\n--- recovery-mode migration (the store is migrated IN PLACE) ---")
-		recReport, err := recovery.Run(ctx, store, rs, recovery.Options{
+		recOpts := recovery.Options{
 			BinaryPath: staged, ConfigPath: convertedConfig,
 			ListenURL: "http://127.0.0.1:8080/", AdminUser: "admin",
 			ApplyFiles: applyFiles, CLIBinaryPath: *stalwartCLI,
 			StartupTimeout: 20 * time.Minute, HTTPClient: httpClient,
-		})
+		}
+		if isContainer {
+			// The live container is stopped, so the recovery one takes its
+			// mounts and publishes recovery mode's listener where the
+			// health check on this side can reach it.
+			mounts := make([]recovery.ContainerMount, 0, len(containerFacts.Mounts))
+			for _, m := range containerFacts.Mounts {
+				src := m.Name
+				if src == "" {
+					src = m.Source
+				}
+				mounts = append(mounts, recovery.ContainerMount{Source: src, Destination: m.Destination, ReadOnly: !m.RW})
+			}
+			recOpts.ConfigPath = containerConfigPath
+			recOpts.Launcher = recovery.ContainerLauncher{
+				Image: stagedImage, Mounts: mounts,
+				Name:    *containerName + "-migrate-recovery",
+				Publish: []string{"127.0.0.1:8080:8080"},
+			}
+		}
+		recReport, err := recovery.Run(ctx, store, rs, recOpts)
 		fmt.Print(recReport.String())
 		if err != nil {
 			return fmt.Errorf("recovery-mode migration failed - the store may be part-migrated and the service is still "+
@@ -361,6 +446,7 @@ func runRun(args []string) (err error) {
 		ServiceUnitPath: *serviceUnitPath, ConfigPath: *newConfigPath,
 		ConfigSource: configSource, ConfigOwnerReference: *configPath,
 		Deployment:             service.Options{Kind: service.Kind(rs.Topology.DeploymentKind), UnitName: *unitName, ContainerName: *containerName},
+		Container:              containerCutover(isContainer, *containerName, stagedImage, runStateDir),
 		RecoveryPointConfirmed: *recoveryConfirmed,
 		AdminURL:               *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
 		HTTPClient: httpClient, RecalculateQuotas: *recalcQuotas && p.CrossesMajorBoundary,
@@ -433,4 +519,14 @@ func buildSupplement(settingsPath, principalsPath, unmigratedPath, outPath strin
 		fmt.Printf("  warning: %s\n", w)
 	}
 	return nil
+}
+
+// containerCutover is the cutover options for a container deployment, or
+// nil for a binary one. Nil is what keeps cutover refusing a container it
+// was given no image to recreate from.
+func containerCutover(isContainer bool, name, image, preserveDir string) *cutover.ContainerOptions {
+	if !isContainer {
+		return nil
+	}
+	return &cutover.ContainerOptions{ContainerName: name, StagedImage: image, PreserveDir: preserveDir}
 }

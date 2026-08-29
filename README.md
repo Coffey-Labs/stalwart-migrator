@@ -10,6 +10,11 @@ job](#recovery-is-your-job) before using it on anything you care about.
 
 Go, standard library only — no external dependencies.
 
+A companion to [**ihasmail**](https://github.com/LINUXexpert-org/ihasmail),
+a JMAP-first webmail client for Stalwart. That one is what you read your
+mail in; this one is what gets the server underneath it onto a version that
+speaks the protocol it needs.
+
 **This has been used to migrate a production mail server.** On 2026-08-25 it
 took a live server — nine domains, six accounts, a 2.4 GB RocksDB store —
 from 0.15.5 to 0.16.19 with **8 seconds** of downtime, every phase green
@@ -55,7 +60,7 @@ described above.
 |---|---|
 | `stalwart-migrate preflight` | **Works** — read-only checks and a migration plan |
 | `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
-| `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes` |
+| `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes`. Container deployments additionally need `--container-path-unproven` (see [Docker deployments](#docker-deployments)) |
 | `stalwart-migrate tenants` | **Works** — read-only; who owns which domain, and what would block a migration |
 | `stalwart-migrate status <id>` | **Works** |
 | `stalwart-migrate report <id>` | **Works** — prints what validation found for a run |
@@ -69,6 +74,49 @@ tool cannot undo a migration and will not start without it).
 
 **Start with `rehearse` first.** It is read-only, needs no maintenance
 window, and tells you what `run` will and won't carry over.
+
+### Docker deployments
+
+A containerised Stalwart can be migrated, with two things to know first.
+
+**The container path has never been run against a real Stalwart image.**
+Its logic is tested and its refusals are real, but a fake `docker` proves
+only that the right commands are assembled — not that the image reads the
+config it is handed. `run` refuses a container deployment unless you pass
+`--container-path-unproven`, which is there so nobody reaches it without
+being told. Rehearse on a clone first; that advice goes double here.
+
+**Two flags and one convention:**
+
+- `--target-image` names the image in full, e.g.
+  `stalwartlabs/stalwart:v0.16.14`. It is never derived from the running
+  container by swapping the tag — that is wrong for a digest-pinned image,
+  a mirror or a fork, and being wrong means pulling the wrong software into
+  a mail server.
+- `--container` names the container (default `stalwart`).
+- `--data-dir` must name the path **inside** the container, since that is
+  where its data actually lives. `preflight` says so if it matches none of
+  the container's mounts.
+
+**What it refuses, and why.** A container cannot be edited in place the way
+a unit file can, so cutting one over means rebuilding it — and a container
+rebuilt without its capabilities, its custom network or its device mappings
+starts cleanly and is quietly not the server it was. So cutover carries
+across what it understands (mounts, ports, environment, restart policy,
+labels) and refuses outright when it finds anything else, naming what it
+found. It also refuses a container whose data is not on a volume — an
+upgrade replaces the container, and the writable layer goes with it — and
+one managed by Docker Compose, because recreating it out from under compose
+leaves the container and the compose file disagreeing about what is
+deployed, and the next `compose up` reverts the migration. Compose
+deployments are migrated by editing the image tag in the compose file and
+running `compose up -d`.
+
+**What it keeps.** The old container is renamed rather than removed, the old
+image is never pruned, and the container's `docker inspect` is preserved as
+an artifact before anything is replaced. Together those are the manual
+restore path — see [Recovery is your job](#recovery-is-your-job), which
+applies here exactly as it does to a binary install.
 
 Measured on a full migration: the store converts in seconds, and the service
 was down for **6 seconds** end to end. Plan the window around verification,

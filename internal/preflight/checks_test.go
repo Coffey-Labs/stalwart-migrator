@@ -475,7 +475,16 @@ func withFakeDocker(t *testing.T) {
 // install with a fake docker on PATH.
 func dockerPreflight(t *testing.T, advisory bool) Report {
 	t.Helper()
-	withFakeDocker(t)
+	// disk-space stats DataDir on this host, and container-data-volume
+	// wants it covered by a mount, so it has to be both: a real directory,
+	// mounted by the fake container.
+	dataDir := t.TempDir()
+	for _, p := range systemdUnitPaths {
+		if _, err := os.Stat(p); err == nil {
+			t.Skipf("host has %s, which detection prefers over docker", p)
+		}
+	}
+	fakeInspect(t, inspectDoc(t, nil, []Mount{dataVolume(dataDir)}))
 
 	counterPath := filepath.Join(t.TempDir(), "invocations")
 	binaryPath := writeFakeBinary(t, "0.15.5", counterPath)
@@ -495,7 +504,7 @@ func dockerPreflight(t *testing.T, advisory bool) Report {
 	// only thing that varies: whether stalwart-cli happens to be installed
 	// on the machine running the tests is not what this is testing.
 	report, err := New(Options{
-		BinaryPath: binaryPath, ConfigPath: configPath, DataDir: t.TempDir(),
+		BinaryPath: binaryPath, ConfigPath: configPath, DataDir: dataDir,
 		TargetVersion: "latest", ToolCheckAdvisory: true, DeploymentCheckAdvisory: advisory,
 	}).Run(context.Background(), store, rs)
 	if err != nil {
@@ -504,21 +513,25 @@ func dockerPreflight(t *testing.T, advisory bool) Report {
 	return report
 }
 
-// A container has to be refused here, in preflight, and not later. Cutover
-// already refuses it -- but cutover runs after the service has been stopped,
-// so refusing there refuses with mail down, which turned an attempted
-// migration into an outage.
-func TestPreflightBlocksADockerDeployment(t *testing.T) {
+// Being a container is no longer a refusal on its own - cutover can
+// recreate one now. What refuses is specific to *this* container: compose
+// management, and data that is not on a volume. Those live in
+// container_test.go, and both still block.
+//
+// This previously asserted the blanket refusal. It asserts the replacement
+// rather than being deleted, because "docker is allowed through here" is
+// the thing that would be wrong to regress.
+func TestPreflightAllowsAPlainContainerThroughTheKindCheck(t *testing.T) {
 	report := dockerPreflight(t, false)
-	if !report.Blocking() {
-		t.Fatalf("expected a blocking report for a docker deployment, got:\n%s", report.String())
+	if report.Blocking() {
+		t.Fatalf("a plain container on a volume should not be blocked:\n%s", report.String())
 	}
 	var found bool
 	for _, res := range report.Results {
 		if res.Name == "deployment-kind" {
 			found = true
-			if res.Status != StatusFail {
-				t.Errorf("deployment-kind status = %q, want %q", res.Status, StatusFail)
+			if res.Status != StatusOK {
+				t.Errorf("deployment-kind status = %q, want %q", res.Status, StatusOK)
 			}
 			if !strings.Contains(res.Detail, "docker") {
 				t.Errorf("deployment-kind detail does not mention docker: %q", res.Detail)
