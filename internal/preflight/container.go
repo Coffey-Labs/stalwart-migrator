@@ -300,9 +300,9 @@ func (c *Checker) runContainerChecks(ctx context.Context, runCheck checkFunc) er
 			return CheckResult{Status: status, Detail: fmt.Sprintf(
 				"data dir %s is not covered by any of the container's mounts (%s), so it lives in the writable layer and would "+
 					"not survive the container being replaced. Check whether --data-dir names the path inside the container",
-				c.opts.DataDir, describeMounts(facts.Mounts))}, ""
+				c.opts.DataDir, DescribeMounts(facts.Mounts))}, ""
 		}
-		return CheckResult{Status: StatusOK, Detail: "container has writable mounts: " + describeMounts(writable)}, ""
+		return CheckResult{Status: StatusOK, Detail: "container has writable mounts: " + DescribeMounts(writable)}, ""
 	})
 	return err
 }
@@ -322,7 +322,8 @@ func mountSource(m Mount) string {
 	return m.Source
 }
 
-func describeMounts(mounts []Mount) string {
+// DescribeMounts renders mounts for an operator-facing message.
+func DescribeMounts(mounts []Mount) string {
 	if len(mounts) == 0 {
 		return "none"
 	}

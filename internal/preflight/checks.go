@@ -200,19 +200,19 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 		// automate it - but cutover runs after the service has been
 		// stopped. Refusing there means refusing with mail already down,
 		// which is how a migration attempt turned into an outage.
-		if kind == DeploymentDocker && !c.opts.DeploymentCheckAdvisory {
-			return CheckResult{
-				Status: StatusFail,
-				Detail: "detected deployment kind: docker - this tool cannot cut over a container. " +
-					"Migrating one means pulling the new image and recreating the container, which has to be done by hand; " +
-					"`rehearse` still works and will tell you what the migration involves",
-			}, string(kind)
-		}
 		status := StatusOK
-		if kind == DeploymentUnknown {
+		detail := fmt.Sprintf("detected deployment kind: %s", kind)
+		switch kind {
+		case DeploymentUnknown:
 			status = StatusWarn
+		case DeploymentDocker:
+			// No longer a refusal on its own: a container can be migrated
+			// now. What still refuses is specific and checked below -
+			// compose, and data that is not on a volume - because those are
+			// properties of this container rather than of containers.
+			detail += " - the container checks below decide whether this one can be migrated"
 		}
-		return CheckResult{Status: status, Detail: fmt.Sprintf("detected deployment kind: %s", kind)}, string(kind)
+		return CheckResult{Status: status, Detail: detail}, string(kind)
 	})
 	if err != nil {
 		return report, err
