@@ -63,6 +63,20 @@ func cmp(a, b int) int {
 // automates - see ARCHITECTURE.md §1/§4.1.
 var minSupportedSource = semver{0, 15, 0}
 
+// VersionFromOutput extracts a semver from whatever a Stalwart build
+// printed when asked for its version. Exported because the same question
+// gets asked of a container image (internal/stage), where the command is
+// `docker run <image> --version` rather than the binary directly - and the
+// answer has to be parsed identically or the two paths could disagree
+// about what they staged.
+func VersionFromOutput(out string) (string, error) {
+	v, err := parseSemver(out)
+	if err != nil {
+		return "", err
+	}
+	return v.String(), nil
+}
+
 // DetectVersion runs the installed binary's --version flag and extracts a
 // semver from its output.
 func DetectVersion(ctx context.Context, binaryPath string) (string, error) {
