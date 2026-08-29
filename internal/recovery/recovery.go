@@ -29,6 +29,11 @@ type Options struct {
 	StartupTimeout time.Duration
 	StopGrace      time.Duration
 	HTTPClient     *http.Client
+
+	// Launcher starts the target version. Nil means BinaryPath as a child
+	// process, which is what every caller wants today; a container
+	// deployment supplies its own (issue #3).
+	Launcher Launcher
 }
 
 // GenerateRecoveryPassword returns a fresh random one-time password for
@@ -64,12 +69,16 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 			return checkpoint.StepOutcome{}, err
 		}
 
-		proc := &Process{}
-		if startErr := proc.Start(ctx, ProcessOptions{
-			BinaryPath: opts.BinaryPath, ConfigPath: opts.ConfigPath,
+		launcher := opts.Launcher
+		if launcher == nil {
+			launcher = BinaryLauncher{BinaryPath: opts.BinaryPath}
+		}
+		proc, startErr := launcher.Launch(ctx, LaunchOptions{
+			ConfigPath:   opts.ConfigPath,
 			RecoveryMode: true, AdminUser: opts.AdminUser, AdminPassword: password,
 			ExtraEnv: opts.ExtraEnv,
-		}); startErr != nil {
+		})
+		if startErr != nil {
 			return checkpoint.StepOutcome{}, startErr
 		}
 
@@ -115,7 +124,7 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 // words are usually the whole diagnosis - a bind conflict, a rejected
 // config value - and without them the caller is left guessing at a
 // timeout.
-func outputSuffix(proc *Process) string {
+func outputSuffix(proc Supervised) string {
 	out := strings.TrimSpace(proc.Output())
 	if out == "" {
 		return " (the process produced no output)"
