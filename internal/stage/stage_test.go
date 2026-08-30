@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -94,7 +95,7 @@ func withReleaseAPI(t *testing.T, srv *httptest.Server) {
 
 func TestRunStagesTheServerBuildAndVerifiesItsVersion(t *testing.T) {
 	archive := tarGzWith(t, "stalwart", versionScript("0.16.14"), tar.TypeReg)
-	srv := releaseServer(t, "v0.16.14", archive, assetSuffix)
+	srv := releaseServer(t, "v0.16.14", archive, hostAssetName(t))
 	withReleaseAPI(t, srv)
 	store, rs := newRun(t)
 	dest := filepath.Join(t.TempDir(), "stalwart-0.16.14")
@@ -126,7 +127,7 @@ func TestRunStagesTheServerBuildAndVerifiesItsVersion(t *testing.T) {
 // runtime failure much later.
 func TestRunRefusesWhenTheServerBuildIsAbsent(t *testing.T) {
 	archive := tarGzWith(t, "stalwart", versionScript("0.16.14"), tar.TypeReg)
-	srv := releaseServer(t, "v0.16.14", archive, "stalwart-aarch64-unknown-linux-gnu.tar.gz")
+	srv := releaseServer(t, "v0.16.14", archive, "stalwart-foundationdb-"+strings.TrimPrefix(hostAssetName(t), "stalwart-"))
 	withReleaseAPI(t, srv)
 	store, rs := newRun(t)
 
@@ -134,7 +135,7 @@ func TestRunRefusesWhenTheServerBuildIsAbsent(t *testing.T) {
 		TargetVersion: "0.16.14", DestPath: filepath.Join(t.TempDir(), "s"), HTTPClient: srv.Client(),
 	})
 	if err == nil {
-		t.Fatal("want a refusal when the x86_64 server build isn't published")
+		t.Fatal("want a refusal when this host's plain server build isn't published")
 	}
 	if !strings.Contains(err.Error(), "won't substitute another") {
 		t.Errorf("error %q should say it refuses to substitute a different build", err)
@@ -146,7 +147,7 @@ func TestRunRefusesWhenTheServerBuildIsAbsent(t *testing.T) {
 // else's release process.
 func TestRunRefusesAnArchiveThatDoesNotMatchItsTag(t *testing.T) {
 	archive := tarGzWith(t, "stalwart", versionScript("0.16.9"), tar.TypeReg)
-	srv := releaseServer(t, "v0.16.14", archive, assetSuffix)
+	srv := releaseServer(t, "v0.16.14", archive, hostAssetName(t))
 	withReleaseAPI(t, srv)
 	store, rs := newRun(t)
 
@@ -163,7 +164,7 @@ func TestRunRefusesAnArchiveThatDoesNotMatchItsTag(t *testing.T) {
 
 func TestRunHonoursAPinnedChecksum(t *testing.T) {
 	archive := tarGzWith(t, "stalwart", versionScript("0.16.14"), tar.TypeReg)
-	srv := releaseServer(t, "v0.16.14", archive, assetSuffix)
+	srv := releaseServer(t, "v0.16.14", archive, hostAssetName(t))
 	withReleaseAPI(t, srv)
 	store, rs := newRun(t)
 
@@ -234,7 +235,7 @@ func TestRunIsSkippedOnResume(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": "v0.16.14",
-			"assets":   []map[string]any{{"name": assetSuffix, "browser_download_url": "http://" + r.Host + "/right/download"}},
+			"assets":   []map[string]any{{"name": hostAssetName(t), "browser_download_url": "http://" + r.Host + "/right/download"}},
 		})
 	}))
 	defer srv.Close()
@@ -250,5 +251,64 @@ func TestRunIsSkippedOnResume(t *testing.T) {
 	}
 	if downloads != 1 {
 		t.Errorf("downloaded %d time(s), want 1 - a resumed run must not re-fetch 100 MB", downloads)
+	}
+}
+
+// hostAssetName is the release asset this machine's architecture calls
+// for. Tests name it this way rather than hard-coding x86_64 so the suite
+// passes on the arm64 hosts this tool is also expected to run on.
+func hostAssetName(t *testing.T) string {
+	t.Helper()
+	name, err := hostAsset(runtime.GOARCH)
+	if err != nil {
+		t.Skipf("no server build is selected for this architecture: %v", err)
+	}
+	return name
+}
+
+// Staging the x86_64 build on an arm64 host produced "exec format error"
+// from stage's own version check, with nothing in the message to say the
+// download had been for the wrong machine. Reported by @kaya-eu, who had
+// to fetch the aarch64 archive by hand and pass it with --target-binary.
+func TestHostAssetFollowsTheArchitecture(t *testing.T) {
+	for arch, want := range map[string]string{
+		"amd64": "stalwart-x86_64-unknown-linux-gnu.tar.gz",
+		"arm64": "stalwart-aarch64-unknown-linux-gnu.tar.gz",
+	} {
+		got, err := hostAsset(arch)
+		if err != nil {
+			t.Fatalf("hostAsset(%q): %v", arch, err)
+		}
+		if got != want {
+			t.Errorf("hostAsset(%q) = %q, want %q", arch, got, want)
+		}
+	}
+}
+
+// An architecture with no unambiguous gnu server build is refused by name
+// rather than quietly falling back to x86_64, which is the bug this
+// replaced. 32-bit ARM is the real case: GOARCH=arm does not say whether
+// the host wants the arm or the armv7 archive.
+func TestHostAssetRefusesAnArchitectureItCannotChooseFor(t *testing.T) {
+	_, err := hostAsset("arm")
+	if err == nil {
+		t.Fatal("want a refusal for an architecture with no selected build")
+	}
+	if !strings.Contains(err.Error(), "--target-binary") {
+		t.Errorf("error %q should point at the --target-binary escape hatch", err)
+	}
+}
+
+// Every selected asset must be the plain server build. The FoundationDB
+// and musl archives are a substring away from the right answer and would
+// surface as a puzzling runtime failure much later.
+func TestSelectedAssetsAreThePlainServerBuilds(t *testing.T) {
+	for arch, name := range assetForArch {
+		if !strings.HasPrefix(name, "stalwart-") || !strings.HasSuffix(name, "-unknown-linux-gnu.tar.gz") {
+			t.Errorf("%s: %q is not a plain Linux gnu server archive", arch, name)
+		}
+		if strings.Contains(name, "foundationdb") || strings.Contains(name, "musl") {
+			t.Errorf("%s: %q is a variant build, not the plain server", arch, name)
+		}
 	}
 }

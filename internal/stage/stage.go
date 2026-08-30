@@ -14,19 +14,53 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
 )
 
-// assetSuffix is the release asset holding a plain Linux x86_64 server
-// binary. Stalwart publishes several builds per release; this deliberately
-// matches only the one, rather than taking the first thing that looks
-// close - picking the FoundationDB build or a musl variant by accident is
-// the kind of mistake that surfaces as a puzzling runtime failure much
-// later.
-const assetSuffix = "stalwart-x86_64-unknown-linux-gnu.tar.gz"
+// assetForArch maps a Go architecture to the release asset holding the
+// plain Linux server binary built for it. Stalwart publishes a couple of
+// dozen builds per release, and these are matched by exact name rather
+// than by anything that looks close - picking the FoundationDB build or a
+// musl variant by accident is the kind of mistake that surfaces as a
+// puzzling runtime failure much later, and "stalwart-foundationdb-aarch64-
+// unknown-linux-gnu.tar.gz" is a substring match away from the right
+// answer.
+//
+// Only the two architectures with an unambiguous gnu server build are
+// here. The 32-bit ARM releases come in arm and armv7 flavours that
+// GOARCH=arm does not distinguish between, and guessing which one a host
+// wants is how it ends up with a binary that runs until it doesn't.
+var assetForArch = map[string]string{
+	"amd64": "stalwart-x86_64-unknown-linux-gnu.tar.gz",
+	"arm64": "stalwart-aarch64-unknown-linux-gnu.tar.gz",
+}
+
+// hostAsset names the asset for the architecture this tool is running on.
+//
+// It is the host's architecture, not a configured one, because the binary
+// staged here is executed here: stage runs it to confirm its version, the
+// recovery cycle runs it to migrate the store, and cutover installs it as
+// the service. A mismatch surfaces as "exec format error" at the first of
+// those - early, and before anything has stopped, but with nothing in the
+// message to say the download was for the wrong machine.
+// It takes the architecture rather than reading runtime.GOARCH itself so
+// a test can ask what an arm64 host would have downloaded without being
+// one.
+func hostAsset(goarch string) (string, error) {
+	name, ok := assetForArch[goarch]
+	if !ok {
+		return "", fmt.Errorf(
+			"stage: no Stalwart server build is selected for %s/%s - this tool stages the x86_64 and aarch64 Linux "+
+				"builds and won't guess at another. Download the right release archive yourself and pass it with "+
+				"--target-binary, and pin it with --target-binary-sha256",
+			runtime.GOOS, goarch)
+	}
+	return name, nil
+}
 
 // binaryNameInArchive is the file to extract from that tarball.
 const binaryNameInArchive = "stalwart"
@@ -72,15 +106,20 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
 		}
-		asset := serverAsset(release)
+		wantAsset, err := hostAsset(runtime.GOARCH)
+		if err != nil {
+			return checkpoint.StepOutcome{}, err
+		}
+		asset := serverAsset(release, wantAsset)
 		if asset == nil {
 			names := make([]string, 0, len(release.Assets))
 			for _, a := range release.Assets {
 				names = append(names, a.Name)
 			}
 			return checkpoint.StepOutcome{}, fmt.Errorf(
-				"stage: release %s publishes no %s asset (found: %s) - this tool stages a Linux x86_64 server build and won't substitute another",
-				release.TagName, assetSuffix, strings.Join(names, ", "))
+				"stage: release %s publishes no %s asset, which is the Linux server build for this host's %s (found: %s) - "+
+					"this tool won't substitute another",
+				release.TagName, wantAsset, runtime.GOARCH, strings.Join(names, ", "))
 		}
 
 		archivePath := opts.DestPath + ".tar.gz"
@@ -127,9 +166,9 @@ func Run(ctx context.Context, store *checkpoint.Store, rs *checkpoint.RunState, 
 	return opts.DestPath, nil
 }
 
-func serverAsset(release *preflight.Release) *preflight.ReleaseAsset {
+func serverAsset(release *preflight.Release, name string) *preflight.ReleaseAsset {
 	for i := range release.Assets {
-		if release.Assets[i].Name == assetSuffix {
+		if release.Assets[i].Name == name {
 			return &release.Assets[i]
 		}
 	}
