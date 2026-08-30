@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 LINUXexpert-org
+// SPDX-FileCopyrightText: 2026 Coffey Labs
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package service starts and stops the Stalwart service itself, whether it's run as a systemd unit or a Docker container.
