@@ -20,6 +20,15 @@ import (
 // it. A container reporting exactly these has overridden nothing, which is
 // the case the image comparison exists to recognise - `docker inspect`
 // reports all three either way.
+// fakeImageID is the digest inspectDoc reports, and what the fake answers
+// `inspect -f {{.Image}}` with. fakeContainerVersion is what running that
+// image prints for --version - the same 0.15.5 the fake host binary
+// reports, so the docker and binary paths are testing the same migration.
+const (
+	fakeImageID          = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	fakeContainerVersion = "stalwart 0.15.5"
+)
+
 var (
 	imageUser       = "stalwart"
 	imageEntrypoint = []string{"/usr/local/bin/stalwart"}
@@ -47,9 +56,16 @@ func fakeInspectOn(t *testing.T, containerDoc, imgDoc string) {
 	if err := os.WriteFile(img, []byte(imgDoc), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Four questions this tool asks docker: the container's definition,
+	// the image's defaults, the container's image ID, and what that image
+	// reports as its version.
 	script := fmt.Sprintf("#!/bin/sh\n"+
 		"case \"$1 $2\" in \"image inspect\") cat %q ; exit 0 ;; esac\n"+
-		"case \"$1\" in inspect) cat %q ;; *) exit 1 ;; esac\n", img, out)
+		"case \"$1\" in\n"+
+		"  inspect) if [ \"$2\" = \"-f\" ]; then echo %q; else cat %q; fi ;;\n"+
+		"  run) echo %q ;;\n"+
+		"  *) exit 1 ;;\n"+
+		"esac\n", img, fakeImageID, out, fakeContainerVersion)
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -321,5 +337,43 @@ func TestInspectContainerRefusesWhenTheImageCannotBeRead(t *testing.T) {
 
 	if _, err := InspectContainer(context.Background(), "stalwart"); err == nil {
 		t.Fatal("want an error when the image's defaults cannot be read")
+	}
+}
+
+// A container-only host has no Stalwart binary, so reading the running
+// version from --binary failed preflight's very first check and nothing
+// downstream ever ran. What is running is a property of the container's
+// image.
+func TestPreflightReadsTheSourceVersionFromTheContainersImage(t *testing.T) {
+	report := dockerPreflightOn(t, false, nil)
+	for _, res := range report.Results {
+		if res.Name != "version" {
+			continue
+		}
+		if res.Status != StatusOK {
+			t.Fatalf("version status = %q, want %q: %s", res.Status, StatusOK, res.Detail)
+		}
+		if !strings.Contains(res.Detail, "0.15.5") {
+			t.Errorf("version detail should report the image's version, got %q", res.Detail)
+		}
+		if !strings.Contains(res.Detail, "image behind container") {
+			t.Errorf("version detail should say where it read the version, got %q", res.Detail)
+		}
+		return
+	}
+	t.Fatalf("no version result in report:\n%s", report.String())
+}
+
+// Asking the image by ID rather than by the tag the container was started
+// from: a moved tag would report a version nothing is running.
+func TestDetectContainerVersionAsksTheImageTheContainerIsOn(t *testing.T) {
+	fakeInspect(t, inspectDoc(t, nil, []Mount{dataVolume("/var/lib/stalwart")}))
+
+	got, err := DetectContainerVersion(context.Background(), "stalwart")
+	if err != nil {
+		t.Fatalf("DetectContainerVersion: %v", err)
+	}
+	if got != "0.15.5" {
+		t.Errorf("DetectContainerVersion = %q, want 0.15.5", got)
 	}
 }

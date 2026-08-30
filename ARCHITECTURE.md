@@ -304,6 +304,19 @@ against an already-migrated store.
   while the server is still running, and again at cutover: the answer does
   not change between them, and only one of the two points can refuse
   without having already cost an outage.
+- What is *running* is a property of a container's image, not of anything
+  on this host. Preflight's first check used to run `--version` on
+  `--binary`, which a container-only host does not have - so the first
+  check failed and nothing downstream ever ran, including every container
+  check. A host that happens to have a stray binary is worse than one that
+  does not: it answers confidently with a version nothing is running. The
+  source version is now read by running the image the container is on, by
+  ID rather than by the tag it was started from, with the same command
+  §4.3 uses for the target image so the two cannot disagree about what a
+  Stalwart image reports.
+- For the same reason there is no old binary to move aside on a container.
+  Its equivalent is already guaranteed: the old container is renamed and
+  the old image is never pruned.
 - What a container *inherits* from its image is not what it *overrides*,
   and only the override is the operator's. `docker inspect` reports
   `User`, `Cmd` and `Entrypoint` either way - a container off the official
