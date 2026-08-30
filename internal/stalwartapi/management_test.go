@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 LINUXexpert-org
+// SPDX-FileCopyrightText: 2026 Coffey Labs
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package stalwartapi
