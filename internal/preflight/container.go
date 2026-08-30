@@ -436,6 +436,15 @@ func describeOverrides(f ContainerFacts) string {
 	return ", including what it overrides on its image: " + strings.Join(parts, ", ")
 }
 
+// containerNameOr is the container this tool would act on, defaulted the
+// same way every other caller defaults it.
+func containerNameOr(name string) string {
+	if name == "" {
+		return "stalwart"
+	}
+	return name
+}
+
 func shortID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
 	if len(id) > 12 {

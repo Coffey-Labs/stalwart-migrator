@@ -96,8 +96,25 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 		return outcome, nil
 	}
 
+	// Detected once, here, because the very first check needs it: what is
+	// running is a property of a container's image, not of any binary on
+	// this host, and a container-only host has no binary to ask. The
+	// deployment-kind check below reports it; this only decides who to put
+	// the question to.
+	kind := DetectDeploymentKind(ctx, c.opts.ContainerName)
+
 	versionOutcome, err := runCheck("version", func() (CheckResult, string) {
-		cur, err := DetectVersion(ctx, c.opts.BinaryPath)
+		var (
+			cur    string
+			err    error
+			source string
+		)
+		if kind == DeploymentDocker {
+			cur, err = DetectContainerVersion(ctx, c.opts.ContainerName)
+			source = ", read from the image behind container " + containerNameOr(c.opts.ContainerName)
+		} else {
+			cur, err = DetectVersion(ctx, c.opts.BinaryPath)
+		}
 		if err != nil {
 			return CheckResult{Status: StatusFail, Detail: err.Error()}, ""
 		}
@@ -108,7 +125,7 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 				Detail: fmt.Sprintf("current version %s is older than the minimum supported %s - upgrade to 0.15.x first", cur, minSupportedSource),
 			}, cur
 		}
-		return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("current version %s", cur)}, cur
+		return CheckResult{Status: StatusOK, Detail: fmt.Sprintf("current version %s%s", cur, source)}, cur
 	})
 	if err != nil {
 		return report, err
@@ -193,7 +210,8 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 	}
 
 	deploymentOutcome, err := runCheck("deployment-kind", func() (CheckResult, string) {
-		kind := DetectDeploymentKind(ctx, c.opts.ContainerName)
+		// Detected once above, since the version check already needed it.
+		// Asking twice could report two different answers for one run.
 		// Docker has to fail here rather than later. Cutover refuses this
 		// deployment - recreating a container from a new image is not
 		// swapping a binary and rewriting a unit, and this tool does not

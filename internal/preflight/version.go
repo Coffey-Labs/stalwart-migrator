@@ -77,6 +77,47 @@ func VersionFromOutput(out string) (string, error) {
 	return v.String(), nil
 }
 
+// DetectContainerVersion reads the running version of a container
+// deployment, which is a property of its image rather than of anything on
+// this host.
+//
+// A container-only host has no Stalwart binary to ask, and a host that
+// happens to have one is worse than a host that does not: a stray
+// /usr/local/bin/stalwart left over from an older install answers
+// confidently with a version nothing is running. So this asks the image
+// the container is actually on, by ID rather than by the tag it was
+// started from.
+//
+// The command mirrors internal/stage's, including the fallback, because
+// the two have to agree about what a Stalwart image reports or the source
+// and target versions could be read by different rules.
+func DetectContainerVersion(ctx context.Context, containerName string) (string, error) {
+	if containerName == "" {
+		containerName = "stalwart"
+	}
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Image}}", containerName).Output()
+	if err != nil {
+		return "", fmt.Errorf("preflight: reading the image behind container %s: %w", containerName, err)
+	}
+	imageID := strings.TrimSpace(string(out))
+	if imageID == "" {
+		return "", fmt.Errorf("preflight: container %s reports no image", containerName)
+	}
+
+	raw, runErr := exec.CommandContext(ctx, "docker", "run", "--rm", imageID, "--version").Output()
+	if runErr != nil {
+		raw, runErr = exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "stalwart", imageID, "--version").Output()
+	}
+	if runErr != nil {
+		return "", fmt.Errorf("preflight: asking image %s for its version: %w", shortID(imageID), runErr)
+	}
+	v, err := VersionFromOutput(string(raw))
+	if err != nil {
+		return "", fmt.Errorf("preflight: image %s did not report a version this understands: %w", shortID(imageID), err)
+	}
+	return v, nil
+}
+
 // DetectVersion runs the installed binary's --version flag and extracts a
 // semver from its output.
 func DetectVersion(ctx context.Context, binaryPath string) (string, error) {

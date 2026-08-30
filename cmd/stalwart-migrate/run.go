@@ -292,6 +292,17 @@ func runRun(args []string) (err error) {
 
 	fmt.Println("\n--- preserve the old binary ---")
 	if _, err := store.RunStep(rs, checkpoint.PhaseBackup, "preserve-binary", func() (checkpoint.StepOutcome, error) {
+		// A container has no binary on this host to move aside, and its
+		// equivalent is already guaranteed elsewhere: cutover renames the
+		// old container rather than removing it and never prunes the old
+		// image, which together are what an operator starts again by hand
+		// (§4.5). Renaming a stray /usr/local/bin/stalwart here would
+		// preserve something nothing was running.
+		if isContainer {
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf(
+				"container deployment: nothing to preserve on this host. The old image (%s) is never pruned and the old "+
+					"container is renamed rather than removed at cutover", containerFacts.Image)}, nil
+		}
 		preserved, err := backup.PreserveBinary(*binaryPath, rs.SourceVersion)
 		if err != nil {
 			return checkpoint.StepOutcome{}, err
