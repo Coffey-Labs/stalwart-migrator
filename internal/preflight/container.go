@@ -55,7 +55,23 @@ type ContainerFacts struct {
 	Ports         map[string][]PortBinding
 	RestartPolicy string
 	NetworkMode   string
-	Unsupported   []string // populated by UnsupportedForRecreate
+	Unsupported   []string // populated by unsupportedForRecreate
+
+	// User, Entrypoint and Cmd are set only when the container overrides
+	// what its image already says.
+	//
+	// The distinction is the whole point. `docker inspect` reports these
+	// three whether the operator set them or the image did - a container
+	// off the official image reports User "stalwart" and Cmd
+	// ["--config", "/etc/stalwart/config.json"] having been given
+	// neither. Treating an inherited value as the operator's would either
+	// refuse every ordinary container or pin the new image to the old
+	// image's defaults, and the new image's defaults are the ones that go
+	// with the new image. Only a genuine override is the operator's
+	// decision, and only that has to survive a recreate.
+	User       string
+	Entrypoint []string
+	Cmd        []string
 }
 
 // PortBinding is one published port.
@@ -107,15 +123,10 @@ func (f ContainerFacts) MountFor(path string) (Mount, bool) {
 // separately from ContainerFacts because docker's shape is docker's to
 // change, and the rest of this package should not have to know it.
 type inspectOutput struct {
-	Name   string `json:"Name"`
-	Image  string `json:"Image"`
-	Config struct {
-		Image  string            `json:"Image"`
-		Labels map[string]string `json:"Labels"`
-		Env    []string          `json:"Env"`
-		User   string            `json:"User"`
-	} `json:"Config"`
-	State struct {
+	Name   string          `json:"Name"`
+	Image  string          `json:"Image"`
+	Config containerConfig `json:"Config"`
+	State  struct {
 		Running bool `json:"Running"`
 	} `json:"State"`
 	Mounts     []Mount `json:"Mounts"`
@@ -143,6 +154,24 @@ type inspectOutput struct {
 	NetworkSettings struct {
 		Networks map[string]any `json:"Networks"`
 	} `json:"NetworkSettings"`
+}
+
+// containerConfig is the part of a container's or an image's Config this
+// reasons about. Both docker objects carry the same shape here, which is
+// what makes comparing them possible.
+type containerConfig struct {
+	Image      string            `json:"Image"`
+	Labels     map[string]string `json:"Labels"`
+	Env        []string          `json:"Env"`
+	User       string            `json:"User"`
+	Entrypoint []string          `json:"Entrypoint"`
+	Cmd        []string          `json:"Cmd"`
+}
+
+// imageInspectOutput is `docker image inspect`, which reports the defaults
+// a container inherits when it was given none of its own.
+type imageInspectOutput struct {
+	Config containerConfig `json:"Config"`
 }
 
 // InspectContainer reads the facts about containerName. An error here is
@@ -178,8 +207,64 @@ func InspectContainer(ctx context.Context, containerName string) (ContainerFacts
 		RestartPolicy: c.HostConfig.RestartPolicy.Name,
 		NetworkMode:   c.HostConfig.NetworkMode,
 	}
+
+	// The image the container is actually on, by ID rather than by the tag
+	// it was started from: a tag can have moved since, and then this would
+	// be comparing the container against something it never inherited
+	// from.
+	base, err := inspectImage(ctx, c.Image)
+	if err != nil {
+		return ContainerFacts{}, err
+	}
+	if c.Config.User != base.User {
+		f.User = c.Config.User
+	}
+	if !sameArgs(c.Config.Entrypoint, base.Entrypoint) {
+		f.Entrypoint = c.Config.Entrypoint
+	}
+	if !sameArgs(c.Config.Cmd, base.Cmd) {
+		f.Cmd = c.Config.Cmd
+	}
+
 	f.Unsupported = unsupportedForRecreate(c)
 	return f, nil
+}
+
+// inspectImage reads the defaults an image gives the containers made from
+// it. A failure here is an error for the same reason a failed container
+// inspect is: without it there is no way to tell an operator's --user from
+// the image's own USER, and the difference decides what a recreate has to
+// carry.
+func inspectImage(ctx context.Context, imageID string) (containerConfig, error) {
+	if imageID == "" {
+		return containerConfig{}, fmt.Errorf("preflight: container reports no image to compare its configuration against")
+	}
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", imageID).Output()
+	if err != nil {
+		return containerConfig{}, fmt.Errorf("preflight: docker image inspect %s: %w", imageID, err)
+	}
+	var got []imageInspectOutput
+	if err := json.Unmarshal(out, &got); err != nil {
+		return containerConfig{}, fmt.Errorf("preflight: parsing docker image inspect %s: %w", imageID, err)
+	}
+	if len(got) == 0 {
+		return containerConfig{}, fmt.Errorf("preflight: docker image inspect %s returned no image", imageID)
+	}
+	return got[0].Config, nil
+}
+
+// sameArgs compares two argv slices, treating nil and empty as the same
+// thing - docker reports an absent Cmd either way depending on version.
+func sameArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // unsupportedForRecreate names every piece of this container's
@@ -217,7 +302,6 @@ func unsupportedForRecreate(c inspectOutput) []string {
 	add(len(h.SecurityOpt) > 0, "security options (--security-opt)")
 	add(len(h.Tmpfs) > 0, "tmpfs mounts (--tmpfs)")
 	add(h.LogConfig.Type != "" && h.LogConfig.Type != "json-file", "a non-default log driver (--log-driver "+h.LogConfig.Type+")")
-	add(c.Config.User != "", "a container user (--user "+c.Config.User+")")
 
 	// A user-defined network is a name in NetworkSettings.Networks that is
 	// not one of docker's built-ins. Recreating without it puts the server
@@ -274,6 +358,31 @@ func (c *Checker) runContainerChecks(ctx context.Context, runCheck checkFunc) er
 		return err
 	}
 
+	if _, err := runCheck("container-recreatable", func() (CheckResult, string) {
+		// Asked here, while the server is still running, rather than at
+		// cutover where the answer was first needed. Cutover is downstream
+		// of the stop, the settings conversion and the store migration, so
+		// a refusal there is a refusal with the mail already down and the
+		// data already moved - the shape of failure issue #1 was filed for.
+		// Nothing about this answer changes between the two points.
+		if len(facts.Unsupported) > 0 {
+			status := StatusFail
+			if c.opts.DeploymentCheckAdvisory {
+				status = StatusWarn
+			}
+			return CheckResult{Status: status, Detail: fmt.Sprintf(
+				"this container uses configuration that recreating it would not carry across: %s. A container is replaced "+
+					"rather than edited, so those would be silently dropped and the result would start cleanly without being "+
+					"the server it was. Migrate this one by hand",
+				strings.Join(facts.Unsupported, "; "))}, strings.Join(facts.Unsupported, "; ")
+		}
+		carried := describeOverrides(facts)
+		return CheckResult{Status: StatusOK, Detail: "the container's definition is entirely within what a recreate " +
+			"carries across" + carried}, ""
+	}); err != nil {
+		return err
+	}
+
 	_, err := runCheck("container-data-volume", func() (CheckResult, string) {
 		writable := facts.WritableMounts()
 		if len(writable) == 0 {
@@ -305,6 +414,26 @@ func (c *Checker) runContainerChecks(ctx context.Context, runCheck checkFunc) er
 		return CheckResult{Status: StatusOK, Detail: "container has writable mounts: " + DescribeMounts(writable)}, ""
 	})
 	return err
+}
+
+// describeOverrides names the settings a container holds that its image
+// does not, so an operator reading a green check can see what a recreate
+// is being trusted to carry rather than taking "entirely within" on faith.
+func describeOverrides(f ContainerFacts) string {
+	var parts []string
+	if f.User != "" {
+		parts = append(parts, "--user "+f.User)
+	}
+	if len(f.Entrypoint) > 0 {
+		parts = append(parts, "--entrypoint "+strings.Join(f.Entrypoint, " "))
+	}
+	if len(f.Cmd) > 0 {
+		parts = append(parts, "a command ("+strings.Join(f.Cmd, " ")+")")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ", including what it overrides on its image: " + strings.Join(parts, ", ")
 }
 
 func shortID(id string) string {

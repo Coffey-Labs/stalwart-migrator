@@ -37,6 +37,12 @@ func inspectJSON(t *testing.T, extraHost map[string]any, networks map[string]any
 		"Config": map[string]any{
 			"Image": "stalwartlabs/stalwart:v0.15.5",
 			"Env":   []string{"TZ=UTC", "STALWART_RECOVERY_MODE=1"},
+			// Matching imageJSON's defaults, so nothing here reads as an
+			// override. A container off the official image reports all
+			// three having been given none of them.
+			"User":       imageUser,
+			"Entrypoint": imageEntrypoint,
+			"Cmd":        imageCmd,
 		},
 		"State":           map[string]any{"Running": false},
 		"Mounts":          []map[string]any{{"Type": "volume", "Name": "stalwart-data", "Destination": "/opt/stalwart", "RW": true}},
@@ -44,6 +50,28 @@ func inspectJSON(t *testing.T, extraHost map[string]any, networks map[string]any
 		"NetworkSettings": map[string]any{"Networks": networks},
 	}}
 	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// The defaults the official Stalwart image gives every container made
+// from it. They are here rather than inline because the whole point of
+// the image comparison is that a container reporting exactly these has
+// overridden nothing.
+var (
+	imageUser       = "stalwart"
+	imageEntrypoint = []string{"/usr/local/bin/stalwart"}
+	imageCmd        = []string{"--config", "/etc/stalwart/config.json"}
+)
+
+// imageJSON is `docker image inspect` for the image a container is on.
+func imageJSON(t *testing.T) string {
+	t.Helper()
+	b, err := json.Marshal([]map[string]any{{
+		"Config": map[string]any{"User": imageUser, "Entrypoint": imageEntrypoint, "Cmd": imageCmd},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,14 +88,21 @@ func fakeDockerCutover(t *testing.T, doc string) (log string) {
 	if err := os.WriteFile(inspectFile, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	imageFile := filepath.Join(dir, "image.json")
+	if err := os.WriteFile(imageFile, []byte(imageJSON(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$@" >> %q
+case "$1 $2" in
+  "image inspect") cat %q ; exit 0 ;;
+esac
 case "$1" in
   inspect) cat %q ;;
   rename) exit 0 ;;
   run) echo newcontainerid ;;
 esac
-`, log, inspectFile)
+`, log, imageFile, inspectFile)
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -95,9 +130,14 @@ func runContainerFor(t *testing.T, doc string) (*checkpoint.RunState, Report, er
 	}
 	err = runContainerCutover(context.Background(), rs, step, ContainerOptions{
 		ContainerName: "stalwart", StagedImage: "sha256:new", PreserveDir: t.TempDir(),
+		ConfigPath: containerConfig,
 	})
 	return rs, report, err
 }
+
+// containerConfig is the container-side path to the migrated config that
+// run passes to cutover, mirroring run.go's <data mount>/stalwart-migrate.
+const containerConfig = "/opt/stalwart/stalwart-migrate/config.json"
 
 func TestContainerCutoverPreservesTheDefinitionFirst(t *testing.T) {
 	rs, _, err := runContainerFor(t, inspectJSON(t, nil, nil))
@@ -251,4 +291,141 @@ func readLog(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The recreated container has to be started on the config the migration
+// just produced. Left to the image's own default command it would come up
+// on /etc/stalwart/config.json - a different volume from the data
+// directory, holding whatever the old version left there - and be a
+// server with nothing to do with the migration that preceded it.
+// @kaya-eu did this step by hand on three real migrations.
+func TestContainerCutoverStartsOnTheMigratedConfig(t *testing.T) {
+	log := fakeDockerCutover(t, inspectJSON(t, nil, nil))
+	store := checkpoint.NewStore(t.TempDir())
+	rs, err := store.Create("0.15.5", "0.16.14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runContainerCutover(context.Background(), rs, noopStep(store, rs), ContainerOptions{
+		ContainerName: "stalwart", StagedImage: "sha256:new", PreserveDir: t.TempDir(),
+		ConfigPath: containerConfig,
+	}); err != nil {
+		t.Fatalf("runContainerCutover: %v", err)
+	}
+	run := runLine(t, log)
+	if !strings.Contains(run, "--config "+containerConfig) {
+		t.Errorf("run should start the container on the migrated config, got: %s", run)
+	}
+	// After the image, not before: everything past it is the argv.
+	if strings.Index(run, "sha256:new") > strings.Index(run, "--config "+containerConfig) {
+		t.Errorf("--config must come after the image, got: %s", run)
+	}
+}
+
+// An inherited USER belongs to the image. Passing --user stalwart to the
+// new image would be carrying across a decision nobody made, and would
+// break outright on an image that named its user differently.
+func TestContainerCutoverDoesNotCarryInheritedDefaults(t *testing.T) {
+	log := fakeDockerCutover(t, inspectJSON(t, nil, nil))
+	store := checkpoint.NewStore(t.TempDir())
+	rs, _ := store.Create("0.15.5", "0.16.14")
+	if err := runContainerCutover(context.Background(), rs, noopStep(store, rs), ContainerOptions{
+		ContainerName: "stalwart", StagedImage: "sha256:new", PreserveDir: t.TempDir(),
+		ConfigPath: containerConfig,
+	}); err != nil {
+		t.Fatalf("runContainerCutover: %v", err)
+	}
+	run := runLine(t, log)
+	for _, unwanted := range []string{"--user", "--entrypoint"} {
+		if strings.Contains(run, unwanted) {
+			t.Errorf("run carried %s across from the old image's defaults: %s", unwanted, run)
+		}
+	}
+}
+
+// What the operator did override is theirs, and a recreate that drops it
+// starts cleanly as a different server - the failure Unsupported exists to
+// prevent, for two settings that were not being read at all.
+func TestContainerCutoverCarriesTheOperatorsOverrides(t *testing.T) {
+	doc := inspectJSON(t, nil, nil)
+	doc = strings.Replace(doc, `"User":"stalwart"`, `"User":"1500:1500"`, 1)
+	doc = strings.Replace(doc, `"Entrypoint":["/usr/local/bin/stalwart"]`,
+		`"Entrypoint":["/usr/local/bin/wrapper","--trace"]`, 1)
+	log := fakeDockerCutover(t, doc)
+	store := checkpoint.NewStore(t.TempDir())
+	rs, _ := store.Create("0.15.5", "0.16.14")
+	if err := runContainerCutover(context.Background(), rs, noopStep(store, rs), ContainerOptions{
+		ContainerName: "stalwart", StagedImage: "sha256:new", PreserveDir: t.TempDir(),
+		ConfigPath: containerConfig,
+	}); err != nil {
+		t.Fatalf("runContainerCutover: %v", err)
+	}
+	run := runLine(t, log)
+	if !strings.Contains(run, "--user 1500:1500") {
+		t.Errorf("run should carry the overridden user: %s", run)
+	}
+	// docker run takes one word as --entrypoint; the rest is argv.
+	if !strings.Contains(run, "--entrypoint /usr/local/bin/wrapper") {
+		t.Errorf("run should carry the overridden entrypoint: %s", run)
+	}
+	if !strings.Contains(run, "sha256:new --trace") {
+		t.Errorf("the rest of the entrypoint should lead the argv: %s", run)
+	}
+}
+
+// A command of the operator's own and the config this tool has to hand
+// over are the same argv. Their command may point at another config, or
+// at something that is not the server - so this refuses rather than
+// merging and being quietly wrong about which server came up.
+func TestContainerCutoverRefusesToMergeACommandWithTheConfig(t *testing.T) {
+	doc := strings.Replace(inspectJSON(t, nil, nil),
+		`"Cmd":["--config","/etc/stalwart/config.json"]`, `"Cmd":["--config","/srv/mine.toml"]`, 1)
+	_, _, err := runContainerFor(t, doc)
+	if err == nil {
+		t.Fatal("want a refusal when an overridden command collides with the migrated config")
+	}
+	for _, want := range []string{"/srv/mine.toml", containerConfig, "by hand"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal should name %q, got: %v", want, err)
+		}
+	}
+}
+
+// A patch bump converts nothing, so there is no config to point at and
+// the container keeps the command its image gives it.
+func TestContainerCutoverKeepsTheImageCommandWithoutAConfig(t *testing.T) {
+	log := fakeDockerCutover(t, inspectJSON(t, nil, nil))
+	store := checkpoint.NewStore(t.TempDir())
+	rs, _ := store.Create("0.16.14", "0.16.19")
+	if err := runContainerCutover(context.Background(), rs, noopStep(store, rs), ContainerOptions{
+		ContainerName: "stalwart", StagedImage: "sha256:new", PreserveDir: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("runContainerCutover: %v", err)
+	}
+	if run := runLine(t, log); !strings.HasSuffix(strings.TrimSpace(run), "sha256:new") {
+		t.Errorf("run should end at the image, with no argv of its own: %s", run)
+	}
+}
+
+func noopStep(store *checkpoint.Store, rs *checkpoint.RunState) stepFunc {
+	return func(name string, fn func() (checkpoint.StepOutcome, error)) error {
+		_, err := store.RunStep(rs, checkpoint.PhaseCutover, name, fn)
+		return err
+	}
+}
+
+// runLine is the `docker run` the fake recorded.
+func runLine(t *testing.T, log string) string {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "run ") {
+			return line
+		}
+	}
+	t.Fatalf("no `docker run` in the recorded arguments:\n%s", data)
+	return ""
 }

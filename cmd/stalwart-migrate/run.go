@@ -240,6 +240,7 @@ func runRun(args []string) (err error) {
 	// side.
 	convertedConfig := filepath.Join(runWorkDir, "config.json")
 	containerConfigPath := ""
+	containerConfigDir, containerConfigOwner := "", ""
 	if isContainer {
 		mount, ok := containerFacts.MountFor(*dataDir)
 		if !ok {
@@ -254,6 +255,8 @@ func runRun(args []string) (err error) {
 		}
 		convertedConfig = filepath.Join(hostDir, "config.json")
 		containerConfigPath = path.Join(mount.Destination, "stalwart-migrate", "config.json")
+		containerConfigOwner = mount.Source
+		containerConfigDir = hostDir
 	}
 	convertedExport := filepath.Join(runWorkDir, "export.json")
 	unmigratedPath := filepath.Join(runWorkDir, "unmigrated.txt")
@@ -378,6 +381,17 @@ func runRun(args []string) (err error) {
 			if len(tenantFix.Adoptions) > 0 {
 				detail += " - " + tenantFix.String()
 			}
+			// The container reads this config, and it does not run as
+			// root. Done here rather than at cutover because the recovery
+			// cycle is the first thing to open it, and a config it cannot
+			// read surfaces there as a boot that never comes up.
+			if containerConfigOwner != "" {
+				owner, err := matchOwnership(containerConfigOwner, containerConfigDir, convertedConfig)
+				if err != nil {
+					return checkpoint.StepOutcome{}, err
+				}
+				detail += fmt.Sprintf("; %s is owned %s", convertedConfig, owner)
+			}
 			return checkpoint.StepOutcome{Detail: detail}, nil
 		}); err != nil {
 			return fmt.Errorf("convert settings: %w", err)
@@ -446,7 +460,7 @@ func runRun(args []string) (err error) {
 		ServiceUnitPath: *serviceUnitPath, ConfigPath: *newConfigPath,
 		ConfigSource: configSource, ConfigOwnerReference: *configPath,
 		Deployment:             service.Options{Kind: service.Kind(rs.Topology.DeploymentKind), UnitName: *unitName, ContainerName: *containerName},
-		Container:              containerCutover(isContainer, *containerName, stagedImage, runStateDir),
+		Container:              containerCutover(isContainer, *containerName, stagedImage, runStateDir, containerConfigOf(p, containerConfigPath)),
 		RecoveryPointConfirmed: *recoveryConfirmed,
 		AdminURL:               *adminURL, AdminUser: *adminUser, AdminPassword: *adminPassword,
 		HTTPClient: httpClient, RecalculateQuotas: *recalcQuotas && p.CrossesMajorBoundary,
@@ -524,9 +538,26 @@ func buildSupplement(settingsPath, principalsPath, unmigratedPath, outPath strin
 // containerCutover is the cutover options for a container deployment, or
 // nil for a binary one. Nil is what keeps cutover refusing a container it
 // was given no image to recreate from.
-func containerCutover(isContainer bool, name, image, preserveDir string) *cutover.ContainerOptions {
+// containerConfigOf is the container-side config path cutover should start
+// the new container with, which is none at all for a patch bump: nothing
+// was converted, so the container keeps the command its image gives it and
+// the configuration it was already running under.
+func containerConfigOf(p *plan.Plan, configPath string) string {
+	if !p.CrossesMajorBoundary {
+		return ""
+	}
+	return configPath
+}
+
+func containerCutover(isContainer bool, name, image, preserveDir, configPath string) *cutover.ContainerOptions {
 	if !isContainer {
 		return nil
 	}
-	return &cutover.ContainerOptions{ContainerName: name, StagedImage: image, PreserveDir: preserveDir}
+	// configPath is the container-side path to the migrated config, and is
+	// empty for a patch bump that converted nothing - there the container
+	// keeps whatever command its image gives it, which is what it was
+	// already running under.
+	return &cutover.ContainerOptions{
+		ContainerName: name, StagedImage: image, PreserveDir: preserveDir, ConfigPath: configPath,
+	}
 }

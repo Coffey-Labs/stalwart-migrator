@@ -300,7 +300,21 @@ against an already-migrated store.
   it carries across, naming what it found. The list is conservative and
   deliberately not exhaustive; docker's HostConfig has far more fields than
   it checks, and one it does not know about is a reason not to be
-  recreating that container at all.
+  recreating that container at all. That question is asked in preflight,
+  while the server is still running, and again at cutover: the answer does
+  not change between them, and only one of the two points can refuse
+  without having already cost an outage.
+- What a container *inherits* from its image is not what it *overrides*,
+  and only the override is the operator's. `docker inspect` reports
+  `User`, `Cmd` and `Entrypoint` either way - a container off the official
+  image reports user `stalwart` and command
+  `--config /etc/stalwart/config.json` having been given neither - so each
+  is compared against `docker image inspect` of the image the container is
+  actually on. An inherited value is left to the new image, whose own
+  defaults are the ones that go with it; an override is carried onto the
+  recreate. Reading an inherited value as an override is not a harmless
+  over-refusal: before this distinction existed, every ordinary container
+  off the official image was refused at cutover, after the stop.
 - The old container is renamed rather than removed, and the old image is
   never pruned. Together they are the container's manual restore path, the
   nearest equivalent to the preserved binary of §4.2: one command starts
@@ -852,8 +866,20 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   `run` writes it under the host side of whichever mount covers
   `--data-dir` and names it on the container side, because cutover recreates
   a container with the mounts it had and cannot invent a new one for a
-  config file. That is an inference from how the mounts must line up rather
-  than something a real deployment has confirmed.
+  config file. Cutover then starts the new container with `--config` at
+  that path, because the image's own default command points at
+  `/etc/stalwart/config.json` - a different volume, holding whatever the
+  old version left there. An overridden command and that `--config` are
+  the same argv and cannot be merged honestly, so a container with one is
+  refused rather than guessed at.
+  The config is also chowned to whatever owns the data directory before
+  anything reads it: the official image runs as uid 2000, and a
+  root-owned 0640 config is one the server cannot open - a failure that
+  arrives as a recovery boot that never comes up rather than as a
+  permission error anyone would recognise. §4.8 is why that is not left to
+  chance.
+  The path itself remains an inference from how the mounts must line up
+  rather than something a real deployment has confirmed.
 - **Cutover ignores systemd drop-ins.** It rewrites only the main unit
   file, so an `ExecStart` or `Environment` override in
   `/etc/systemd/system/stalwart.service.d/*.conf` is invisible to it -

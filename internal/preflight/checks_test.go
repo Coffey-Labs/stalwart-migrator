@@ -475,6 +475,14 @@ func withFakeDocker(t *testing.T) {
 // install with a fake docker on PATH.
 func dockerPreflight(t *testing.T, advisory bool) Report {
 	t.Helper()
+	return dockerPreflightOn(t, advisory, nil)
+}
+
+// dockerPreflightOn runs preflight against a container whose inspect
+// document has been rewritten by edit, for the cases that need it to be
+// something other than an ordinary one.
+func dockerPreflightOn(t *testing.T, advisory bool, edit func(string) string) Report {
+	t.Helper()
 	// disk-space stats DataDir on this host, and container-data-volume
 	// wants it covered by a mount, so it has to be both: a real directory,
 	// mounted by the fake container.
@@ -484,7 +492,11 @@ func dockerPreflight(t *testing.T, advisory bool) Report {
 			t.Skipf("host has %s, which detection prefers over docker", p)
 		}
 	}
-	fakeInspect(t, inspectDoc(t, nil, []Mount{dataVolume(dataDir)}))
+	doc := inspectDoc(t, nil, []Mount{dataVolume(dataDir)})
+	if edit != nil {
+		doc = edit(doc)
+	}
+	fakeInspect(t, doc)
 
 	counterPath := filepath.Join(t.TempDir(), "invocations")
 	binaryPath := writeFakeBinary(t, "0.15.5", counterPath)
@@ -551,5 +563,47 @@ func TestRehearseStillRunsAgainstADockerDeployment(t *testing.T) {
 	report := dockerPreflight(t, true)
 	if report.Blocking() {
 		t.Fatalf("advisory mode should not block on docker, got:\n%s", report.String())
+	}
+}
+
+// Cutover already refused a container it could not recreate, but cutover
+// is downstream of the stop, the settings conversion and the store
+// migration - so that refusal arrived with the mail down and the data
+// already moved, which is the shape of failure issue #1 was filed for.
+// The answer never changes between the two points, so it is asked here,
+// while the server is still running.
+func TestPreflightRefusesAContainerItCouldNotRecreate(t *testing.T) {
+	report := dockerPreflightOn(t, false, func(doc string) string {
+		return strings.Replace(doc, `"State":`, `"HostConfig":{"Privileged":true},"State":`, 1)
+	})
+	if !report.Blocking() {
+		t.Fatalf("a container preflight cannot recreate should block before anything stops:\n%s", report.String())
+	}
+	var found bool
+	for _, res := range report.Results {
+		if res.Name == "container-recreatable" {
+			found = true
+			if res.Status != StatusFail {
+				t.Errorf("container-recreatable status = %q, want %q", res.Status, StatusFail)
+			}
+			if !strings.Contains(res.Detail, "privileged") {
+				t.Errorf("detail should name what would be dropped, got %q", res.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no container-recreatable result in report:\n%s", report.String())
+	}
+}
+
+// rehearse never stops or recreates anything, so the same finding is a
+// warning there: an operator migrating by hand needs to know it more than
+// an automated run does.
+func TestRehearseWarnsRatherThanBlocksOnAnUnrecreatableContainer(t *testing.T) {
+	report := dockerPreflightOn(t, true, func(doc string) string {
+		return strings.Replace(doc, `"State":`, `"HostConfig":{"Privileged":true},"State":`, 1)
+	})
+	if report.Blocking() {
+		t.Fatalf("advisory mode should not block, got:\n%s", report.String())
 	}
 }
