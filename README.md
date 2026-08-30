@@ -23,6 +23,25 @@ was preceded by a full dress rehearsal on a clone of the same server, which
 is the practice this project most recommends copying: see [Rehearse on a
 clone first](#rehearse-on-a-clone-first).
 
+**It has also been used at a scale well past that, by someone else.**
+[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1)
+reported three successful 0.15.5 → 0.16.19 migrations on three servers: a
+testing and a production instance, each 16 domains, 55 accounts and roughly
+**221 GB** of real mail, and an arm64 home server of 1.4 GB across 181
+folders. Read that with two qualifications. They ran a commit predating the
+automated Docker cutover, so they performed the cutover by hand — what those
+runs exercised is preflight, the dumps, the settings conversion and the
+recovery-mode store migration, not the container cutover. And they hit
+things worth knowing about before you follow them: an arm64 binary that was
+fetched for the wrong architecture (fixed), a store migration that needed
+one more recovery-mode boot than the tool performs (**not fixed** — see [The
+store migration may need one more recovery
+boot](#the-store-migration-may-need-one-more-recovery-boot)), and data loss
+from booting recovery mode again *after* a completed
+migration (see [Do not boot recovery mode
+again](#do-not-boot-recovery-mode-again-afterwards)). Their full report is
+[issue #1](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+
 ## Before you start: two things you must fix on the server
 
 Neither is something this tool can do for you, and both stop a migration
@@ -79,10 +98,12 @@ window, and tells you what `run` will and won't carry over.
 
 A containerised Stalwart can be migrated, with two things to know first.
 
-**The container path has never been run against a real Stalwart image.**
-Its logic is tested and its refusals are real, but a fake `docker` proves
-only that the right commands are assembled — not that the image reads the
-config it is handed. `run` refuses a container deployment unless you pass
+**The container path has never completed a migration against a real
+Stalwart image.** What it inspects and what it assembles have now been
+checked against one, which is how two problems were found and fixed
+(#11) — but a fake `docker` still proves only that the right commands are
+assembled, not that the image reads the config it is handed and comes up
+as the server it was. `run` refuses a container deployment unless you pass
 `--container-path-unproven`, which is there so nobody reaches it without
 being told. Rehearse on a clone first; that advice goes double here.
 
@@ -104,13 +125,30 @@ rebuilt without its capabilities, its custom network or its device mappings
 starts cleanly and is quietly not the server it was. So cutover carries
 across what it understands (mounts, ports, environment, restart policy,
 labels) and refuses outright when it finds anything else, naming what it
-found. It also refuses a container whose data is not on a volume — an
+found — and it asks that question in `preflight`, while the server is still
+running, rather than only at cutover after it has stopped. What it carries
+is mounts, ports, environment, restart policy, labels, and anything the
+container overrides on its image: a `--user`, an `--entrypoint`, a command
+of your own. What the container merely *inherits* from its old image is
+left to the new one, whose own defaults are the ones that go with it.
+It also refuses a container whose data is not on a volume — an
 upgrade replaces the container, and the writable layer goes with it — and
 one managed by Docker Compose, because recreating it out from under compose
 leaves the container and the compose file disagreeing about what is
 deployed, and the next `compose up` reverts the migration. Compose
 deployments are migrated by editing the image tag in the compose file and
 running `compose up -d`.
+
+**The config.** The converted v0.16 config is written into the host side of
+whichever mount covers `--data-dir`, named on the container side, and the
+recreated container is started with `--config` pointing at it. It cannot go
+anywhere else: cutover recreates a container with the mounts it had and
+cannot invent a new one. The official image's own default is
+`--config /etc/stalwart/config.json`, which is a *different* volume, so a
+container left to that default would come up on whatever the old version
+had left there. If your container overrides its command, cutover refuses
+rather than merging the two — both are the container's argv and there is no
+honest way to guess.
 
 **What it keeps.** The old container is renamed rather than removed, the old
 image is never pruned, and the container's `docker inspect` is preserved as
@@ -295,6 +333,47 @@ the server registers a new one on first issuance.
 
 This tool does not yet generate that object for you. It should: the
 supplemental plan already does the equivalent for listeners.
+
+## The store migration may need one more recovery boot
+
+**This one is open, and it is the reason to rehearse on a clone.** The
+recovery cycle boots the target version once, replays your settings into
+it, and stops. Across three real migrations, two different failures showed
+up that one extra recovery-mode boot cured:
+
+- the settings apply failing on its very first object with
+  `primaryKeyViolation`, where re-running the identical apply against a
+  fresh recovery boot went straight through; or
+- the next normal start panicking with *"Upgrading to version 0.16 is a
+  multi-step process"*, where booting recovery mode once more, letting it
+  come up and stopping it cleanly was enough.
+
+Never both on the same run — whichever appeared, one more recovery boot
+before the real start got past it. That panic is Stalwart's own, and it
+suggests the store migration is not finished when the single boot exits.
+
+The likely fix is a settle boot after the apply, and it is not in yet
+because getting an extra recovery boot wrong is its own hazard — see [Do
+not boot recovery mode again
+afterwards](#do-not-boot-recovery-mode-again-afterwards). If you hit
+either, that is the manual step. Reported by
+[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+
+## A certificate that serves HTTPS may not serve the mail ports
+
+A `Certificate` object carried into v0.16 with the right SAN is picked up
+by the HTTP listener on its own. **IMAPS, SMTPS and POP3S are not**: they
+keep serving a self-signed certificate until `defaultCertificateId` is set
+on `SystemSettings` and the server is restarted.
+
+This is the kind of thing that looks fine from a browser and surfaces as a
+mail client complaining days later, so check it as part of your
+post-migration verification: connect to 993 or 465 and confirm which
+certificate you are handed, not just to 443.
+
+This tool does not set it for you. Like the `AcmeProvider` above, it
+should, and the supplemental plan is where it belongs. Reported by
+[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
 
 ## You need a named admin account before you migrate
 
