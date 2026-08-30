@@ -14,16 +14,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/applyplan"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/backup"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/cutover"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/plan"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/recovery"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/stage"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/validate"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/applyplan"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/backup"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/cutover"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/plan"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/recovery"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/service"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/stage"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/validate"
 )
 
 // runRun implements `stalwart-migrate run`: the real migration.

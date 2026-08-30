@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/service"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/stalwartapi"
 )
 
 // Artifact names this phase records. ArtifactServiceUnit is the preserved

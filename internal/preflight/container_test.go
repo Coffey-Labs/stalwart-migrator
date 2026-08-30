@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // The defaults the official Stalwart image gives every container made from

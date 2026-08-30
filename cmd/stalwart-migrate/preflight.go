@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
 )
 
 func runPreflight(args []string) error {

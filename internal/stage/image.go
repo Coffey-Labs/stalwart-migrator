@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
 )
 
 // DefaultDockerBinary is what shells out unless a caller names another.

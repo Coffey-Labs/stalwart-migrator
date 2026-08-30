@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/backup"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/backup"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // preservePlan lifts the run's irreplaceable inputs out of the scratch

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // tarGzWith builds a release-shaped archive containing one entry.

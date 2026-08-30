@@ -10,7 +10,7 @@ job](#recovery-is-your-job) before using it on anything you care about.
 
 Go, standard library only — no external dependencies.
 
-A companion to [**ihasmail**](https://github.com/LINUXexpert-org/ihasmail),
+A companion to [**ihasmail**](https://github.com/Coffey-Labs/ihasmail),
 a JMAP-first webmail client for Stalwart. That one is what you read your
 mail in; this one is what gets the server underneath it onto a version that
 speaks the protocol it needs.
@@ -24,7 +24,7 @@ is the practice this project most recommends copying: see [Rehearse on a
 clone first](#rehearse-on-a-clone-first).
 
 **It has also been used at a scale well past that, by someone else.**
-[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1)
+[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1)
 reported three successful 0.15.5 → 0.16.19 migrations on three servers: a
 testing and a production instance, each 16 domains, 55 accounts and roughly
 **221 GB** of real mail, and an arm64 home server of 1.4 GB across 181
@@ -40,7 +40,7 @@ boot](#the-store-migration-may-need-one-more-recovery-boot)), and data loss
 from booting recovery mode again *after* a completed
 migration (see [Do not boot recovery mode
 again](#do-not-boot-recovery-mode-again-afterwards)). Their full report is
-[issue #1](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+[issue #1](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
 
 ## Before you start: two things you must fix on the server
 
@@ -357,7 +357,7 @@ because getting an extra recovery boot wrong is its own hazard — see [Do
 not boot recovery mode again
 afterwards](#do-not-boot-recovery-mode-again-afterwards). If you hit
 either, that is the manual step. Reported by
-[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
 
 ## A certificate that serves HTTPS may not serve the mail ports
 
@@ -373,7 +373,7 @@ certificate you are handed, not just to 443.
 
 This tool does not set it for you. Like the `AcmeProvider` above, it
 should, and the supplemental plan is where it belongs. Reported by
-[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
 
 ## You need a named admin account before you migrate
 
@@ -491,7 +491,7 @@ migration, use the admin API or `stalwart-cli` against the running server.
 
 This is Stalwart's behaviour rather than this tool's, and it is reported
 here because this tool is where you learned the technique. Reported by
-[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
+[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
 
 ### Why it works this way
 

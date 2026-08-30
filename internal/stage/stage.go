@@ -17,8 +17,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
 )
 
 // assetForArch maps a Go architecture to the release asset holding the

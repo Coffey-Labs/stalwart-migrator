@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/service"
 )
 
 // DeploymentKind is how a Stalwart instance appears to be run, which
