@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/LINUXexpert-org/stalwart-migrator/internal/applyplan"
@@ -74,7 +75,9 @@ func runRun(args []string) (err error) {
 	binarySHA := fs.String("target-binary-sha256", "", "pinned sha256 of the target release archive")
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	recalcQuotas := fs.Bool("recalculate-quotas", true, "schedule the post-migration quota rebuild")
-	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward")
+	keepArtifacts := fs.Bool("keep-artifacts", false, "don't delete work-dir/<run-id> afterward. The run's own inputs - the "+
+		"settings and principals dumps, the apply plan and its supplement - are kept in state-dir/<run-id> either way; this "+
+		"additionally keeps the scratch files around them")
 	resume := fs.String("resume", "", "resume an interrupted run by id instead of starting a new one (see `status` for ids)")
 	yes := fs.Bool("yes", false, "actually perform the migration")
 	containerUnproven := fs.Bool("container-path-unproven", false,
@@ -158,7 +161,12 @@ func runRun(args []string) (err error) {
 		}
 		if rmErr := os.RemoveAll(runWorkDir); rmErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: couldn't clean up %s: %v\n", runWorkDir, rmErr)
+			return
 		}
+		// What is deleted here is scratch. The run's inputs were copied to
+		// the state directory before the store was touched, because they
+		// cannot be produced again once it has been.
+		fmt.Printf("\ncleaned up %s; the run's dumps and apply plan are kept in %s\n", runWorkDir, runStateDir)
 	}()
 
 	fmt.Println("\n--- preflight ---")
@@ -415,6 +423,22 @@ func runRun(args []string) (err error) {
 		} else {
 			applyFiles = append(applyFiles, supplementPath)
 		}
+
+		if _, err := store.RunStep(rs, checkpoint.PhaseBackup, "preserve-plan", func() (checkpoint.StepOutcome, error) {
+			kept, err := preservePlan(runStateDir, map[string]string{
+				"settings-dump":    settingsPath,
+				"principals-dump":  principalsPath,
+				"converted-export": convertedExport,
+				"supplement":       supplementPath,
+			}, rs)
+			if err != nil {
+				return checkpoint.StepOutcome{}, err
+			}
+			return checkpoint.StepOutcome{Detail: fmt.Sprintf("kept %s in %s", strings.Join(kept, ", "), runStateDir)}, nil
+		}); err != nil {
+			return fmt.Errorf("preserve the run's plan: %w", err)
+		}
+		fmt.Println(rs.Outcome(checkpoint.PhaseBackup, "preserve-plan").Detail)
 
 		fmt.Println("\n--- recovery-mode migration (the store is migrated IN PLACE) ---")
 		recOpts := recovery.Options{
