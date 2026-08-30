@@ -374,7 +374,13 @@ if the gap matters to you.
 - **The original service definition is preserved** as `<unit>.pre-<run-id>`
   before cutover rewrites it, so you aren't reconstructing a unit file from
   memory.
-- **The settings and principals dumps** taken during backup stay on disk.
+- **The settings and principals dumps, the apply plan and its supplement**
+  are kept in `<state-dir>/<run-id>` — `/var/lib/stalwart-migrator/runs/<run-id>`
+  unless you moved it. These four are the only files in a run that cannot be
+  produced again afterwards: the dumps need a live pre-migration instance,
+  and the plan is what was actually replayed into your store. They are kept
+  whether or not the run succeeded and whether or not you passed
+  `--keep-artifacts`.
 - **Every artifact path and checksum is in the checkpoint**, and
   `stalwart-migrate status <run-id>` prints exactly which steps completed
   and which failed — which is the first thing you want when deciding what to
@@ -382,6 +388,31 @@ if the gap matters to you.
 
 None of this is a substitute for the snapshot. It's what makes the twenty
 minutes after restoring one less unpleasant.
+
+### Do not boot recovery mode again afterwards
+
+The migration works by starting the new version once in recovery mode,
+replaying your settings into it, and stopping it. That is a one-time step
+in a migration, and it is worth knowing that it is not a general-purpose
+maintenance mode.
+
+An operator who booted recovery mode again — the same way the migration
+does, `STALWART_RECOVERY_MODE=1` against the same data directory — for
+reasons unrelated to the migration, on a server that had migrated
+successfully days earlier, found that `Domain` and `Account` queries came
+back empty on the next normal start. This happened twice, on two different
+servers. It was not a stale read: creating a domain that had certainly
+existed a moment earlier succeeded, with no `primaryKeyViolation`, so the
+records were genuinely gone. Disk usage did not change.
+
+What recovered it both times was re-applying that run's `export.json` and
+`supplement.json` against a fresh recovery boot, which is why those two
+files are now kept for you. If you need to change something after a
+migration, use the admin API or `stalwart-cli` against the running server.
+
+This is Stalwart's behaviour rather than this tool's, and it is reported
+here because this tool is where you learned the technique. Reported by
+[@kaya-eu](https://github.com/LINUXexpert-org/stalwart-migrator/issues/1).
 
 ### Why it works this way
 
