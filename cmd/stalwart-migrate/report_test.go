@@ -6,8 +6,8 @@ package main
 import (
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/validate"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/validate"
 )
 
 // `report` re-reads what the run recorded rather than re-checking, so the

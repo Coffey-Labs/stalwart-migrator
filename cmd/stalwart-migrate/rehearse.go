@@ -12,11 +12,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/applyplan"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/backup"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/plan"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/preflight"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/applyplan"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/backup"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/plan"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/preflight"
 )
 
 // runRehearse implements `stalwart-migrate rehearse` (ARCHITECTURE.md §4.9):

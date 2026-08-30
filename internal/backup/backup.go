@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // Options configures a full backup pass. Which fields matter depends on

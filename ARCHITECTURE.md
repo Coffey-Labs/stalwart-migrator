@@ -341,8 +341,8 @@ against an already-migrated store.
   whether the recreated container comes up as the server it was. That is
   what would retire the flag.
 
-  [#9]: https://github.com/LINUXexpert-org/stalwart-migrator/pull/9
-  [#11]: https://github.com/LINUXexpert-org/stalwart-migrator/pull/11
+  [#9]: https://github.com/Coffey-Labs/stalwart-migrator/pull/9
+  [#11]: https://github.com/Coffey-Labs/stalwart-migrator/pull/11
 - Quota recalculation is the one step allowed to fail without failing the
   phase. Stale counters are an accounting problem; a failed cutover is one
   an operator has to respond to by restoring a machine that is otherwise

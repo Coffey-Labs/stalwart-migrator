@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/stalwartapi"
 )
 
 // MailboxDelta is one mailbox whose message count didn't match between the

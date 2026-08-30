@@ -7,8 +7,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/validate"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/validate"
 )
 
 // runReport prints what validation found for a run, from the checkpoint the

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // A run that never captured a "before" cannot be checked against one. The

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/stalwartapi"
 )
 
 // Options configures a Checker. Every field has a conservative default

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/backup"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/backup"
 )
 
 // The exact principal shape a real 0.15.5 reports.

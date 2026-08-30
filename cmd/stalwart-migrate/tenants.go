@@ -11,7 +11,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/stalwartapi"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/stalwartapi"
 )
 
 // runTenants prints who owns what, read-only.

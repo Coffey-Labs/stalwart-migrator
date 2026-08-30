@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/service"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/service"
 )
 
 // fakeController stands in for systemd, recording call order.

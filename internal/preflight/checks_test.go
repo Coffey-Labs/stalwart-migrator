@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // writeFakeBinary creates a shell script that behaves like `stalwart

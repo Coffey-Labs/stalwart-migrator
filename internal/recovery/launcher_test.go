@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LINUXexpert-org/stalwart-migrator/internal/checkpoint"
+	"github.com/Coffey-Labs/stalwart-migrator/internal/checkpoint"
 )
 
 // recordingLauncher stands in for a deployment that is not a local binary -
