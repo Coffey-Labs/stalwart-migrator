@@ -36,6 +36,18 @@ type ContainerOptions struct {
 	// PreserveDir is where the inspected definition is written.
 	PreserveDir string
 
+	// ConfigPath is the migrated v0.16 config, named as the *container*
+	// sees it - the path inside a mount the container already has, since a
+	// recreate carries the mounts it had and cannot invent a new one.
+	//
+	// Without this the recreated container falls back to its image's own
+	// default command, which on the official image is
+	// `--config /etc/stalwart/config.json`. That path is a different
+	// volume from the data directory and holds whatever the old version
+	// left there, so the new container would come up on a config that has
+	// nothing to do with the migration that just happened.
+	ConfigPath string
+
 	DockerBinary string
 }
 
@@ -96,6 +108,11 @@ func runContainerCutover(ctx context.Context, rs *checkpoint.RunState, step step
 		return err
 	}
 
+	// Preflight asked this too, before anything stopped (§4.1). It is
+	// asked again here because the two are separated by the whole
+	// migration, and a container can be reconfigured in between - but by
+	// the time this refuses, the answer has cost an outage, which is why
+	// preflight is where it is meant to be caught.
 	if err := step("container-is-recreatable", func() (checkpoint.StepOutcome, error) {
 		if len(facts.Unsupported) > 0 {
 			return checkpoint.StepOutcome{}, fmt.Errorf(
@@ -103,6 +120,19 @@ func runContainerCutover(ctx context.Context, rs *checkpoint.RunState, step step
 					"start cleanly and quietly not be the server it was, so this tool will not do it. Migrate this one by hand: "+
 					"the definition is preserved as %s, and the staged image is %s",
 				strings.Join(facts.Unsupported, "; "), rs.Artifacts[ArtifactContainerDefinition].Path, opts.StagedImage)
+		}
+		// A command of the operator's own and a config this tool has to
+		// hand over are the same argv, and there is no honest way to merge
+		// them: their command may point at another config, or at something
+		// that is not the server at all. Refusing names both rather than
+		// picking one and being quietly wrong about which server came up.
+		if opts.ConfigPath != "" && len(facts.Cmd) > 0 {
+			return checkpoint.StepOutcome{}, fmt.Errorf(
+				"this container overrides its image's command (%s), and cutting over has to start the new one with "+
+					"`--config %s` - the migrated configuration. Both are the container's argv and this tool will not guess at "+
+					"a merge. Recreate it by hand from the preserved definition at %s, on image %s, with your command adjusted "+
+					"to that config",
+				strings.Join(facts.Cmd, " "), opts.ConfigPath, rs.Artifacts[ArtifactContainerDefinition].Path, opts.StagedImage)
 		}
 		return checkpoint.StepOutcome{Detail: "the container's definition is entirely within what a recreate carries across"}, nil
 	}); err != nil {
@@ -129,6 +159,17 @@ func runContainerCutover(ctx context.Context, rs *checkpoint.RunState, step step
 		args := []string{"run", "-d", "--name", opts.ContainerName}
 		if facts.RestartPolicy != "" && facts.RestartPolicy != "no" {
 			args = append(args, "--restart", facts.RestartPolicy)
+		}
+		// Only what the container overrode on its old image is carried.
+		// An inherited value belongs to the image, and the new image's own
+		// default is the one that goes with the new image - pinning the
+		// old image's USER or ENTRYPOINT onto it would be carrying across
+		// a decision nobody made.
+		if facts.User != "" {
+			args = append(args, "--user", facts.User)
+		}
+		if len(facts.Entrypoint) > 0 {
+			args = append(args, "--entrypoint", facts.Entrypoint[0])
 		}
 		for _, e := range facts.Env {
 			// Recovery-mode variables must never survive into a normal
@@ -164,12 +205,29 @@ func runContainerCutover(ctx context.Context, rs *checkpoint.RunState, step step
 		}
 		args = append(args, opts.StagedImage)
 
+		// Everything after the image is the container's argv. `docker run`
+		// takes only the first word of an entrypoint as --entrypoint, so
+		// the rest of it leads here.
+		if len(facts.Entrypoint) > 1 {
+			args = append(args, facts.Entrypoint[1:]...)
+		}
+		switch {
+		case opts.ConfigPath != "":
+			args = append(args, "--config", opts.ConfigPath)
+		case len(facts.Cmd) > 0:
+			args = append(args, facts.Cmd...)
+		}
+
 		if out, err := dockerOut(ctx, opts.docker(), args...); err != nil {
 			return checkpoint.StepOutcome{}, fmt.Errorf(
 				"create %s from %s: %w (%s). The previous container is still here as %s",
 				opts.ContainerName, opts.StagedImage, err, out, retired)
 		}
-		return checkpoint.StepOutcome{Detail: fmt.Sprintf("recreated %s on image %s", opts.ContainerName, opts.StagedImage)}, nil
+		detail := fmt.Sprintf("recreated %s on image %s", opts.ContainerName, opts.StagedImage)
+		if opts.ConfigPath != "" {
+			detail += ", started with --config " + opts.ConfigPath
+		}
+		return checkpoint.StepOutcome{Detail: detail}, nil
 	})
 }
 
