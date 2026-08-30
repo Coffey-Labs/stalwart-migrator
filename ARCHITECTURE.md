@@ -321,11 +321,15 @@ against an already-migrated store.
   the previous container again. The `docker inspect` of the container as it
   was is preserved as the `container-definition` artifact before anything
   is replaced, for the same reason the unit file is.
-- **Status: the container path is implemented and not yet reachable from
-  the CLI** - `run` does not pass container options, so a container is
-  still refused there. Wiring it up, and lifting preflight's refusal for
-  the containers it can now handle, is the remaining work in
-  [#3](https://github.com/LINUXexpert-org/stalwart-migrator/issues/3).
+- **Status: the container path is wired end to end and reachable from the
+  CLI** behind `--container-path-unproven` ([#9]). What it inspects and
+  what it assembles have been checked against a real
+  `stalwartlabs/stalwart` image ([#11]); what has not been checked is
+  whether the recreated container comes up as the server it was. That is
+  what would retire the flag.
+
+  [#9]: https://github.com/LINUXexpert-org/stalwart-migrator/pull/9
+  [#11]: https://github.com/LINUXexpert-org/stalwart-migrator/pull/11
 - Quota recalculation is the one step allowed to fail without failing the
   phase. Stale counters are an accounting problem; a failed cutover is one
   an operator has to respond to by restoring a machine that is otherwise
@@ -848,7 +852,11 @@ happens to need them. `preflight.DeploymentKind` is a type alias for
   §4.5 lists exactly which two details are inferred. A smoke test against a
   real 0.16 instance would settle both, and would let this step be promoted
   from "warns on failure" to a hard check.
-- **Docker is wired end to end and has never met a real Stalwart image.**
+- **Docker is wired end to end and has never completed a migration against
+  a real Stalwart image.** A real image has now been inspected, which is
+  how the inherited-versus-overridden confusion above was found, and how it
+  emerged that cutover was never handing the new container the migrated
+  config. What remains unverified is everything after the recreate.
   Preflight inspects a container and blocks on what stands in the way;
   stage pulls and verifies an image; the recovery cycle runs in a throwaway
   container against the live data; cutover recreates the container,
