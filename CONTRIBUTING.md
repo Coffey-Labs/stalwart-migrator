@@ -10,7 +10,7 @@ go build ./...
 go test ./...
 ```
 
-Requires Go 1.26 or newer. The tool is Go standard library only — no external
+Requires Go 1.26.8 or newer. The tool is Go standard library only — no external
 dependencies — and nothing third-party is vendored.
 
 To try a command from a checkout without installing it:
@@ -21,6 +21,25 @@ sudo go run ./cmd/stalwart-migrate preflight
 
 [docs/rehearsal.md](docs/rehearsal.md) explains why even read-only commands need
 write access to the checkpoint directory.
+
+## Releases
+
+Releases are tagged by date, like ihasmail's: `v2026.9.15`, with `.1`, `.2`
+added for another release the same day. Binaries for `linux/amd64` and
+`linux/arm64` and a `SHA256SUMS` file are attached to every
+[release](https://github.com/Coffey-Labs/stalwart-migrator/releases).
+
+Every release is built by the [release workflow](.github/workflows/release.yml)
+from a tagged commit on `main`, after the tests and a known-vulnerabilities
+check pass. The archives are reproducible: `scripts/build-release.sh` builds the
+same bytes from the same commit, so a release can be checked before tagging:
+
+```sh
+scripts/build-release.sh v2026.9.15 dist
+```
+
+If a pushed tag's run never starts, run the workflow by hand from the Actions
+tab and give it the tag.
 
 ## Why not a shell script
 
