@@ -24,13 +24,13 @@ it needs.
 | | |
 | --- | --- |
 | 📘 **[Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/)** | **Start here.** The whole upgrade, step by step, on docs.ihasmail.org: what to fix first, rehearsing, running it, and what to check afterwards |
-| **[docs/rehearsal.md](docs/rehearsal.md)** | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
-| **[docs/docker.md](docs/docker.md)** | Container deployments: flags, what cutover carries and refuses, where the config goes |
-| **[docs/known-stalwart-problems.md](docs/known-stalwart-problems.md)** | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
-| **[docs/recovery.md](docs/recovery.md)** | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
-| **[docs/status.md](docs/status.md)** | Command and package state, validation, field reports |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | The design: phases, checkpoints, and the reasoning behind them |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Building, testing, and where the design is written down |
+| 🧪 **[Rehearsing](docs/rehearsal.md)** | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
+| 🐳 **[Docker](docs/docker.md)** | Container deployments: flags, what cutover carries and refuses, where the config goes |
+| ⚠️ **[Known Stalwart problems](docs/known-stalwart-problems.md)** | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
+| 🛟 **[Recovery](docs/recovery.md)** | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
+| 📊 **[Status](docs/status.md)** | Command and package state, validation, field reports |
+| ⚙️ **[Architecture](ARCHITECTURE.md)** | The design: phases, checkpoints, and the reasoning behind them |
+| 🔧 **[Contributing](CONTRIBUTING.md)** | Building, testing, and where the design is written down |
 
 ## Requirements
 
