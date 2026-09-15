@@ -1,528 +1,111 @@
 # stalwart-migrator
 
-In-place upgrade tool for Stalwart Mail Server, 0.15.5 → latest: no data
-loss, a checkpoint at every step so an interrupted run resumes instead of
-restarting, and automated validation that the server still works afterwards.
+In-place upgrade tool for Stalwart Mail Server, 0.15.5 → 0.16: no data loss, a
+checkpoint at every step so an interrupted run resumes instead of restarting,
+and automated validation that the server still works afterwards. Go, standard
+library only.
 
-**Recovery from a failed migration is your own snapshot or backup — this
-tool does not undo a migration.** See [Recovery is your
-job](#recovery-is-your-job) before using it on anything you care about.
+A companion to [**ihasmail**](https://github.com/Coffey-Labs/ihasmail), a
+JMAP-first webmail client for Stalwart. That one is what you read your mail in;
+this one gets the server underneath it onto a version that speaks the protocol
+it needs.
 
-Go, standard library only — no external dependencies.
+> [!CAUTION]
+> **A migration cannot be undone, and this tool does not undo one.** Recovery
+> from a failed migration is your own snapshot or backup, taken beforehand and
+> checked. `run` will not start until you confirm you have one. See
+> [Recovery](docs/recovery.md).
 
-A companion to [**ihasmail**](https://github.com/Coffey-Labs/ihasmail),
-a JMAP-first webmail client for Stalwart. That one is what you read your
-mail in; this one is what gets the server underneath it onto a version that
-speaks the protocol it needs.
+**Full guide:** [docs.ihasmail.org/install/stalwart-migrator](https://docs.ihasmail.org/install/stalwart-migrator/)
+walks through the whole upgrade — what to fix first, rehearsing, running it,
+and what to check afterwards.
 
-**This has been used to migrate a production mail server.** On 2026-08-25 it
-took a live server — nine domains, six accounts, a 2.4 GB RocksDB store —
-from 0.15.5 to 0.16.19 with **8 seconds** of downtime, every phase green
-including post-cutover validation, mail flowing before and after. That run
-was preceded by a full dress rehearsal on a clone of the same server, which
-is the practice this project most recommends copying: see [Rehearse on a
-clone first](#rehearse-on-a-clone-first).
+## Requirements
 
-**It has also been used at a scale well past that, by someone else.**
-[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1)
-reported three successful 0.15.5 → 0.16.19 migrations on three servers: a
-testing and a production instance, each 16 domains, 55 accounts and roughly
-**221 GB** of real mail, and an arm64 home server of 1.4 GB across 181
-folders. Read that with two qualifications. They ran a commit predating the
-automated Docker cutover, so they performed the cutover by hand — what those
-runs exercised is preflight, the dumps, the settings conversion and the
-recovery-mode store migration, not the container cutover. And they hit
-things worth knowing about before you follow them: an arm64 binary that was
-fetched for the wrong architecture (fixed), a store migration that needed
-one more recovery-mode boot than the tool performs (**not fixed** — see [The
-store migration may need one more recovery
-boot](#the-store-migration-may-need-one-more-recovery-boot)), and data loss
-from booting recovery mode again *after* a completed
-migration (see [Do not boot recovery mode
-again](#do-not-boot-recovery-mode-again-afterwards)). Their full report is
-[issue #1](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
+- Stalwart **0.15.5**, as a systemd service or a single Docker container
+- root on the mail server
+- `python3`, for Stalwart's own `migrate_v016.py`
+- `stalwart-cli` **1.0.2 or later**, a separate download from the server
+- an administrator account **in Stalwart's directory** — not the
+  `fallback-admin` from `config.toml`, which does not survive the migration
+- Go **1.26 or newer**, to build
 
-## Before you start: two things you must fix on the server
+## Fix these on the server first
 
-Neither is something this tool can do for you, and both stop a migration
-dead. `preflight` refuses on both, while the mail server is still running —
-but they are worth knowing before you book a maintenance window, because
-fixing them is a change to your directory, not a flag.
+Both stop a migration, and `preflight` refuses on both:
 
-1. **Remove or collapse multi-tenancy.** v0.16 requires a tenant-scoped
-   account to sit on a domain owned by that same tenant, for its primary
-   domain and every alias. v0.15 imposed no such rule, so an install that is
-   perfectly valid today can be unrepresentable in v0.16. Run
-   `stalwart-migrate tenants` to see who owns what. Where a domain has no
-   tenant of its own and only one tenant's accounts use it, the conversion
-   repairs it for you; where two tenants genuinely share a domain, nothing
-   can, and you must resolve it in v0.15 first — give each tenant its own
-   domains, move the accounts into one tenant, or remove the tenants
-   entirely.
+1. **Tenants that share a domain.** v0.16 requires an account in a tenant to
+   use only that tenant's domains. `stalwart-migrate tenants` shows who owns
+   what.
+2. **A config-file admin.** Migrate as a directory account with the admin role,
+   whose local part is unique and whose rights don't come only from
+   `tenant-admin`.
 
-2. **Migrate as a directory account, not the built-in admin.** A
-   `[authentication.fallback-admin]` from `config.toml` authenticates
-   perfectly well right up to the moment the migration finishes, and then
-   stops existing — v0.16 keeps its configuration in the store, so the block
-   defining it is never read again. The migration itself still succeeds; what
-   you lose is the ability to verify it, recalculate quotas, or administer
-   the server afterwards. See [You need a named admin
-   account](#you-need-a-named-admin-account-before-you-migrate).
+Details: [Known Stalwart problems](docs/known-stalwart-problems.md).
+
+## Build
+
+```sh
+git clone https://github.com/Coffey-Labs/stalwart-migrator.git
+cd stalwart-migrator
+go build -o stalwart-migrate ./cmd/stalwart-migrate
+```
+
+## Use
+
+Give the admin password with `--admin-password` or
+`STALWART_MIGRATE_ADMIN_PASSWORD`.
+
+```sh
+# 1. Read-only checks and a migration plan
+sudo ./stalwart-migrate preflight --admin-url https://mail.example.com --admin-user admin@example.com
+
+# 2. Read-only: convert your settings and report what won't carry over
+sudo ./stalwart-migrate rehearse --admin-url https://mail.example.com --admin-user admin@example.com
+
+# 3. Rehearse the real migration on a clone of the server (strongly recommended)
+
+# 4. Migrate, once you have a snapshot you have checked you can restore
+sudo ./stalwart-migrate run --admin-url https://mail.example.com --admin-user admin@example.com \
+    --recovery-point-confirmed --yes
+
+# Afterwards
+sudo ./stalwart-migrate status <run-id>     # which steps completed
+sudo ./stalwart-migrate report <run-id>     # what validation found
+```
+
+A Docker container also needs `--container-path-unproven` and `--target-image`;
+see [Docker deployments](docs/docker.md). After the migration, check the
+certificate on ports 993 and 465, and recreate your ACME provider — Stalwart's
+converter drops it without saying so.
 
 ## Status
 
-Roughly 14,600 lines of Go, stdlib only, of which about 6,300 are tests.
-Every phase exists as a package and `run` wires them into the migration
-described above.
-
-| Command | State |
-|---|---|
-| `stalwart-migrate preflight` | **Works** — read-only checks and a migration plan |
-| `stalwart-migrate rehearse` | **Works** — read-only; converts your settings and reports what won't carry over |
-| `stalwart-migrate run` | **Works** — performs the migration; `--recovery-point-confirmed --yes`. Container deployments additionally need `--container-path-unproven` (see [Docker deployments](#docker-deployments)) |
-| `stalwart-migrate tenants` | **Works** — read-only; who owns which domain, and what would block a migration |
-| `stalwart-migrate status <id>` | **Works** |
-| `stalwart-migrate report <id>` | **Works** — prints what validation found for a run |
-
-**`run` performs the migration**, in the order
-preflight → stage → dump → stop → convert → recovery-mode → cutover →
-validate. It
-needs two flags: `--yes` (intent) and `--recovery-point-confirmed` (a claim
-that you have a snapshot or backup you have verified you can restore — this
-tool cannot undo a migration and will not start without it).
-
-**Start with `rehearse` first.** It is read-only, needs no maintenance
-window, and tells you what `run` will and won't carry over.
-
-### Docker deployments
-
-A containerised Stalwart can be migrated, with two things to know first.
-
-**The container path has never completed a migration against a real
-Stalwart image.** What it inspects and what it assembles have now been
-checked against one, which is how two problems were found and fixed
-(#11) — but a fake `docker` still proves only that the right commands are
-assembled, not that the image reads the config it is handed and comes up
-as the server it was. `run` refuses a container deployment unless you pass
-`--container-path-unproven`, which is there so nobody reaches it without
-being told. Rehearse on a clone first; that advice goes double here.
-
-**Two flags and one convention:**
-
-- `--target-image` names the image in full, e.g.
-  `stalwartlabs/stalwart:v0.16.14`. It is never derived from the running
-  container by swapping the tag — that is wrong for a digest-pinned image,
-  a mirror or a fork, and being wrong means pulling the wrong software into
-  a mail server.
-- `--container` names the container (default `stalwart`).
-- `--data-dir` must name the path **inside** the container, since that is
-  where its data actually lives. `preflight` says so if it matches none of
-  the container's mounts.
-
-**What it refuses, and why.** A container cannot be edited in place the way
-a unit file can, so cutting one over means rebuilding it — and a container
-rebuilt without its capabilities, its custom network or its device mappings
-starts cleanly and is quietly not the server it was. So cutover carries
-across what it understands (mounts, ports, environment, restart policy,
-labels) and refuses outright when it finds anything else, naming what it
-found — and it asks that question in `preflight`, while the server is still
-running, rather than only at cutover after it has stopped. What it carries
-is mounts, ports, environment, restart policy, labels, and anything the
-container overrides on its image: a `--user`, an `--entrypoint`, a command
-of your own. What the container merely *inherits* from its old image is
-left to the new one, whose own defaults are the ones that go with it.
-It also refuses a container whose data is not on a volume — an
-upgrade replaces the container, and the writable layer goes with it — and
-one managed by Docker Compose, because recreating it out from under compose
-leaves the container and the compose file disagreeing about what is
-deployed, and the next `compose up` reverts the migration. Compose
-deployments are migrated by editing the image tag in the compose file and
-running `compose up -d`.
-
-**The config.** The converted v0.16 config is written into the host side of
-whichever mount covers `--data-dir`, named on the container side, and the
-recreated container is started with `--config` pointing at it. It cannot go
-anywhere else: cutover recreates a container with the mounts it had and
-cannot invent a new one. The official image's own default is
-`--config /etc/stalwart/config.json`, which is a *different* volume, so a
-container left to that default would come up on whatever the old version
-had left there. If your container overrides its command, cutover refuses
-rather than merging the two — both are the container's argv and there is no
-honest way to guess.
-
-**What it keeps.** The old container is renamed rather than removed, the old
-image is never pruned, and the container's `docker inspect` is preserved as
-an artifact before anything is replaced. Together those are the manual
-restore path — see [Recovery is your job](#recovery-is-your-job), which
-applies here exactly as it does to a binary install.
-
-Measured on a full migration: the store converts in seconds, and the service
-was down for **6 seconds** end to end. Plan the window around verification,
-not data volume.
-
-After cutover, `run` compares the migrated instance against the snapshot
-preflight took, and fails the command if an account that existed before is
-missing from it. A domain that no longer appears is reported as a warning
-rather than a failure: the two versions do not agree on what counts as a
-domain — principals on one side, `Domain` objects on the other — and failing
-a migration over that difference would abort runs that lost nothing. The service is left running either way — by that
-point the store has been migrated in place, so stopping it would not undo
-anything; your recovery point is the way back. `report <run-id>` prints the
-same finding again later. Where preflight had no admin URL to snapshot from,
-validation reports itself as skipped rather than passed.
-
-Package state:
-
-Lines are implementation only; each package carries its tests alongside.
-
-| Package | Lines | Tests |
-|---|---|---|
-| `internal/stalwartapi` | 1456 | yes |
-| `internal/backup` | 1333 | yes |
-| `internal/preflight` | 1035 | yes |
-| `internal/applyplan` | 913 | yes |
-| `internal/cutover` | 784 | yes |
-| `internal/recovery` | 431 | yes |
-| `internal/checkpoint` | 406 | yes |
-| `internal/validate` | 382 | yes |
-| `internal/stage` | 233 | yes |
-| `internal/service` | 201 | yes |
-| `internal/plan` | 130 | yes |
-| `internal/config` | stub | — |
-
-## Why not a shell script
-
-Stalwart's 0.15 → 0.16 boundary is not a drop-in binary swap: settings move,
-and the data directory has to be migrated rather than merely copied. The
-failure mode that matters is a half-migrated mail store with no way back —
-which is why backup verification and checkpointing are the design centre
-rather than conveniences bolted on afterwards — and why the tool refuses to
-cut over until you confirm you have a way back.
-
-[`ARCHITECTURE.md`](ARCHITECTURE.md) covers this in full: §1 on why a thin
-wrapper is insufficient, §4 on the migration phases, §5 on the checkpoint
-state machine, §6 on the CLI surface, and §8 on what is still open.
-
-## Build and test
-
-```sh
-go build ./...
-go test ./...
-```
-
-Requires Go 1.26 or newer.
-
-## Trying it safely
-
-`preflight` is the sensible starting point — its checks against the Stalwart
-installation are read-only:
-
-```sh
-sudo go run ./cmd/stalwart-migrate preflight
-```
-
-It still needs write access, because it records the run as a checkpoint
-before doing anything else:
-
-```
-create run: checkpoint: create run directory:
-mkdir /var/lib/stalwart-migrator: permission denied
-```
-
-That path is `checkpoint.DefaultBaseDir`, a compile-time constant with no
-flag or environment override — so preflight needs either root or a
-pre-created writable `/var/lib/stalwart-migrator`. (`run` takes `--work-dir`
-for its scratch space, but that is a different directory and does not move
-the checkpoint store.)
-
-`rehearse` is the next step, and unlike everything else here it is worth
-running today — see the next section.
-
-## Rehearse before you migrate
-
-```sh
-stalwart-migrate rehearse --admin-url https://mail.example.com \
-    --admin-user admin --target 0.16.14
-```
-
-It runs preflight, dumps your settings and principals, converts them with
-Stalwart's own `migrate_v016.py`, and reports **both halves** of the result:
-the apply plan of what will carry over, and the worklist of what will not.
-
-It copies no data, clones nothing, starts no server, and never writes to the
-store, so it is safe to run against production repeatedly and without a
-maintenance window.
-
-It also generates a **supplemental plan** for the part it can rebuild
-automatically — currently your network listeners, which is the difference
-between a migrated server that answers and one that doesn't — and reports
-exactly how much of the worklist that covers (on a test instance: 24 of
-3,505 keys, and it says so rather than implying more). Review it, then apply
-it after `export.json`:
-
-```sh
-stalwart-cli apply --file <state-dir>/runs/<run-id>/supplement.json \
-    --url https://mail.example.com
-```
-
-The worklist is long but mostly not work, and `rehearse` says which is
-which. Measured against a real production instance, `migrate_v016.py`
-carried **219 of 12,401 settings**. Of the 12,182 it left:
-
-- **8,547** are runtime auto-ban state that repopulates itself
-- **3,337** are stock spam-filter and lookup data v0.16 ships its own copies
-  of — restoring v0.15's would revert a year of upstream updates
-- **~224** were already carried another way, DKIM signatures included
-- **~293** genuinely need your eyes
-
-`server.listener` is in that third group only because this tool regenerates
-it for you; without that a migrated instance answers on no ports at all. Both outputs are preserved
-under `<state-dir>/runs/<run-id>/` (`export.json` and `unmigrated.txt`) even
-though the rest of the scratch directory is cleaned up, because they are the
-conclusions.
-
-This replaced an earlier `run --dry-run` that cloned the data directory into
-a sandbox and migrated the copy. That proved the store opens, at the cost of
-copying it twice — while the half that found every real problem needed no
-copy at all. ARCHITECTURE.md §4.9 has the reasoning.
-
-## Rehearse on a clone first
-
-`rehearse` is read-only and stops short of the half that matters: it converts
-your settings but never applies them, and applying is where a real migration
-fails. A clone closes that gap, and on a 2.4 GB store it costs about six
-seconds of production downtime to build.
-
-1. **Copy the data directory with the service stopped.** RocksDB is
-   single-writer, so a hot copy may be torn — and a rehearsal on a torn store
-   fails for reasons production never would, or passes when it should not.
-   Stop, `cp -a` the data dir to the same disk, start again, archive it
-   afterwards; the service is down only for the local copy.
-2. **Give the guest no route off the host.** A clone of a live mail server
-   will otherwise renew certificates for your real domains and deliver
-   whatever is in the outbound queue. In libvirt that means a network with no
-   `<forward>` element. Verify it from inside the guest rather than assuming.
-3. **Run the real thing**: `preflight`, then `run` with `--target-binary`,
-   `--stalwart-cli` and `--migration-script` pointed at locally staged copies,
-   since an isolated guest can download nothing.
-4. **Snapshot the guest while it is shut down**, so a failed attempt costs
-   seconds to reset rather than a rebuild.
-
-What that rehearsal caught, none of which the mock could express: a
-multi-tenant arrangement v0.16 cannot represent; `--target-binary` never
-reaching preflight, so an air-gapped host failed on a release lookup; an
-`admin` account that was a config fallback-admin and stopped working the
-moment the migration finished; and `tenant-admin` roles the converter does
-not restore.
-
-Two things the isolation costs, so they are not mistaken for faults: the
-guest cannot fetch the v0.16 web interface, so `/account/` returns 404, and
-certificate renewal cannot be exercised at all.
-
-## Stalwart's own converter silently drops ACME
-
-`migrate_v016.py` consumes every `acme.*` setting and emits nothing for them.
-They are **not** reported as unmigrated either, so nothing warns you: the
-certificate carries over, the provider that renews it does not, and TLS keeps
-working until the certificate expires roughly ninety days later.
-
-Check for `acme.*` in your dump before migrating, and recreate an
-`AcmeProvider` afterwards if there was one. Note that `accountKey` is
-server-set in v0.16, so the existing ACME account cannot be carried over —
-the server registers a new one on first issuance.
-
-This tool does not yet generate that object for you. It should: the
-supplemental plan already does the equivalent for listeners.
-
-## The store migration may need one more recovery boot
-
-**This one is open, and it is the reason to rehearse on a clone.** The
-recovery cycle boots the target version once, replays your settings into
-it, and stops. Across three real migrations, two different failures showed
-up that one extra recovery-mode boot cured:
-
-- the settings apply failing on its very first object with
-  `primaryKeyViolation`, where re-running the identical apply against a
-  fresh recovery boot went straight through; or
-- the next normal start panicking with *"Upgrading to version 0.16 is a
-  multi-step process"*, where booting recovery mode once more, letting it
-  come up and stopping it cleanly was enough.
-
-Never both on the same run — whichever appeared, one more recovery boot
-before the real start got past it. That panic is Stalwart's own, and it
-suggests the store migration is not finished when the single boot exits.
-
-The likely fix is a settle boot after the apply, and it is not in yet
-because getting an extra recovery boot wrong is its own hazard — see [Do
-not boot recovery mode again
-afterwards](#do-not-boot-recovery-mode-again-afterwards). If you hit
-either, that is the manual step. Reported by
-[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
-
-## A certificate that serves HTTPS may not serve the mail ports
-
-A `Certificate` object carried into v0.16 with the right SAN is picked up
-by the HTTP listener on its own. **IMAPS, SMTPS and POP3S are not**: they
-keep serving a self-signed certificate until `defaultCertificateId` is set
-on `SystemSettings` and the server is restarted.
-
-This is the kind of thing that looks fine from a browser and surfaces as a
-mail client complaining days later, so check it as part of your
-post-migration verification: connect to 993 or 465 and confirm which
-certificate you are handed, not just to 443.
-
-This tool does not set it for you. Like the `AcmeProvider` above, it
-should, and the supplemental plan is where it belongs. Reported by
-[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
-
-## You need a named admin account before you migrate
-
-**A config-file fallback admin will not survive the migration.** If the only
-administrator you have is an `[authentication.fallback-admin]` block in
-`config.toml` — which is what `stalwart --init` sets up — you will come out
-of the migration unable to administer the server.
-
-Create a real account in the directory, with the admin role, and confirm you
-can log in as it *before* migrating. Three separate reasons, all verified
-against a real 0.15.5 → 0.16.14 migration:
-
-1. **v0.16 keeps its configuration in the store, not in a file.** After the
-   migration the server is started with a config that is little more than a
-   pointer at the data store, so the old `config.toml` — and the
-   fallback-admin block inside it — is no longer read at all. That
-   credential simply stops existing.
-2. **`migrate_v016.py` gives every migrated account the `User` role**,
-   whatever it held before. An account that was an administrator in v0.15
-   comes out authenticating normally and refused every management
-   operation. `rehearse` generates the operation that restores it — but the
-   account has to exist in the directory for there to be anything to
-   restore.
-3. **The account's local part must be unambiguous.** v0.16 identifies an
-   account by local part plus domain, so if `admin@one.example` and
-   `admin@two.example` both exist, this tool will refuse to restore either
-   role rather than risk granting administrator rights to the wrong one.
-   It says so rather than guessing; you then grant it by hand.
-
-4. **The role has to survive, not just the account.** `tenant-admin` has no
-   v0.16 equivalent and is not restored, so an account whose rights came
-   only from it authenticates afterwards and is still refused management
-   operations. Preflight cannot check this — it cannot know which roles the
-   converter will carry across — so confirm on a clone, or immediately
-   afterwards, that the account can still administer the server.
-
-`preflight` refuses to proceed if the account you authenticate with is not
-in the directory, so this is caught before anything is touched rather than
-after the migration completes. The practical check: make sure you can
-authenticate to the admin API as a directory account — not as the fallback
-admin — that its local part is unique across your domains, and that it holds
-admin rights through a role other than `tenant-admin`.
-
-## Recovery is your job
-
-**This tool does not undo a migration.** There is no `rollback` command.
-Recovery from a failed migration is your own snapshot or backup, taken by
-whatever method you already trust and know how to restore — a ZFS, LVM or
-btrfs snapshot, a VM or volume snapshot, or a restorable backup. Choosing
-that method, taking it, and verifying you can actually restore from it is
-out of scope for this tool: it does not take one, does not check that one
-exists, and cannot restore from one.
-
-Cutover refuses to start until you confirm a recovery point exists. That
-confirmation is an acknowledgement, not a check — nothing here can verify
-your snapshot. Its only purpose is that nobody migrates a production mail
-server having never been asked the question.
-
-**Take the snapshot with the service stopped** if you want a clean one. A
-snapshot of a running Stalwart is crash-consistent rather than clean; RocksDB
-will usually recover from its WAL, but "usually" is doing real work in that
-sentence.
-
-### Restoring from a snapshot loses mail delivered since
-
-Reverting to any pre-migration recovery point discards mail delivered
-between taking it and restoring it. This is inherent to restoring a point in
-time and this tool cannot solve it — plan your migration window with that in
-mind, and consider holding inbound mail at a secondary MX for the duration
-if the gap matters to you.
-
-### What the tool does to make a manual restore easier
-
-- **The old binary is preserved**, never deleted, next to the new one as
-  `<binary>.v<old-version>` — so putting things back doesn't depend on
-  re-downloading a specific old release under pressure.
-- **The original service definition is preserved** as `<unit>.pre-<run-id>`
-  before cutover rewrites it, so you aren't reconstructing a unit file from
-  memory.
-- **The settings and principals dumps, the apply plan and its supplement**
-  are kept in `<state-dir>/<run-id>` — `/var/lib/stalwart-migrator/runs/<run-id>`
-  unless you moved it. These four are the only files in a run that cannot be
-  produced again afterwards: the dumps need a live pre-migration instance,
-  and the plan is what was actually replayed into your store. They are kept
-  whether or not the run succeeded and whether or not you passed
-  `--keep-artifacts`.
-- **Every artifact path and checksum is in the checkpoint**, and
-  `stalwart-migrate status <run-id>` prints exactly which steps completed
-  and which failed — which is the first thing you want when deciding what to
-  restore.
-
-None of this is a substitute for the snapshot. It's what makes the twenty
-minutes after restoring one less unpleasant.
-
-### Do not boot recovery mode again afterwards
-
-The migration works by starting the new version once in recovery mode,
-replaying your settings into it, and stopping it. That is a one-time step
-in a migration, and it is worth knowing that it is not a general-purpose
-maintenance mode.
-
-An operator who booted recovery mode again — the same way the migration
-does, `STALWART_RECOVERY_MODE=1` against the same data directory — for
-reasons unrelated to the migration, on a server that had migrated
-successfully days earlier, found that `Domain` and `Account` queries came
-back empty on the next normal start. This happened twice, on two different
-servers. It was not a stale read: creating a domain that had certainly
-existed a moment earlier succeeded, with no `primaryKeyViolation`, so the
-records were genuinely gone. Disk usage did not change.
-
-What recovered it both times was re-applying that run's `export.json` and
-`supplement.json` against a fresh recovery boot, which is why those two
-files are now kept for you. If you need to change something after a
-migration, use the admin API or `stalwart-cli` against the running server.
-
-This is Stalwart's behaviour rather than this tool's, and it is reported
-here because this tool is where you learned the technique. Reported by
-[@kaya-eu](https://github.com/Coffey-Labs/stalwart-migrator/issues/1).
-
-### Why it works this way
-
-An earlier version of this tool implemented rollback itself: it restored the
-filesystem backup, verified every restored file against a manifest, replayed
-SQL dumps, reinstalled the old binary, and re-validated the result. It was
-tested and it looked good. It was removed, because restoring bytes correctly
-is not the hard part — it copied contents and permissions but not
-*ownership*, so run as root it would have produced a byte-perfect,
-checksum-verified, root-owned data directory that Stalwart, running as its
-own user, could not open, and it would have reported success. A filesystem
-snapshot has no such failure mode, because it never lost the metadata to
-begin with. ARCHITECTURE.md §4.8 records the full reasoning.
+Every command works: `preflight`, `rehearse`, `run`, `tenants`, `status` and
+`report`. It has migrated a production server (0.15.5 → 0.16.19, 8 seconds of
+downtime) and, in another operator's hands, three more. Two things are still
+open: some store migrations need one more recovery-mode boot, which is a manual
+step, and the Docker path has never completed a migration against a real
+Stalwart image. Details and field reports: [Status](docs/status.md).
+
+## Documentation
+
+| | |
+| --- | --- |
+| [Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/) | The whole upgrade, step by step, on docs.ihasmail.org |
+| [docs/rehearsal.md](docs/rehearsal.md) | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
+| [docs/docker.md](docs/docker.md) | Container deployments: flags, what cutover carries and refuses, where the config goes |
+| [docs/known-stalwart-problems.md](docs/known-stalwart-problems.md) | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
+| [docs/recovery.md](docs/recovery.md) | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
+| [docs/status.md](docs/status.md) | Command and package state, validation, field reports |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The design: phases, checkpoints, and the reasoning behind them |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, and where the design is written down |
 
 ## License
 
-Copyright (C) 2026 Coffey Labs
+Copyright (C) 2026 Coffey Labs. GPL-3.0-or-later: free software, with no
+warranty. The full text is in [`LICENSE`](LICENSE).
 
-This program is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option)
-any later version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-more details.
-
-You should have received a copy of the GNU General Public License along with
-this program. If not, see <https://www.gnu.org/licenses/>.
-
-The full text is in [`LICENSE`](LICENSE). No third-party code is vendored —
-this tool is standard library only, and the `migrate_v016.py` it downloads
-at runtime is Stalwart's own script, fetched rather than redistributed.
+No third-party code is vendored — the tool is standard library only, and the
+`migrate_v016.py` it downloads at runtime is Stalwart's own script, fetched
+rather than redistributed.
