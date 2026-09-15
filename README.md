@@ -16,9 +16,18 @@ it needs.
 > checked. `run` will not start until you confirm you have one. See
 > [Recovery](docs/recovery.md).
 
-**Full guide:** [docs.ihasmail.org/install/stalwart-migrator](https://docs.ihasmail.org/install/stalwart-migrator/)
-walks through the whole upgrade — what to fix first, rehearsing, running it,
-and what to check afterwards.
+## Documentation
+
+| | |
+| --- | --- |
+| 📘 **[Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/)** | **Start here.** The whole upgrade, step by step, on docs.ihasmail.org: what to fix first, rehearsing, running it, and what to check afterwards |
+| [docs/rehearsal.md](docs/rehearsal.md) | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
+| [docs/docker.md](docs/docker.md) | Container deployments: flags, what cutover carries and refuses, where the config goes |
+| [docs/known-stalwart-problems.md](docs/known-stalwart-problems.md) | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
+| [docs/recovery.md](docs/recovery.md) | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
+| [docs/status.md](docs/status.md) | Command and package state, validation, field reports |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The design: phases, checkpoints, and the reasoning behind them |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, and where the design is written down |
 
 ## Requirements
 
@@ -87,19 +96,6 @@ downtime) and, in another operator's hands, three more. Two things are still
 open: some store migrations need one more recovery-mode boot, which is a manual
 step, and the Docker path has never completed a migration against a real
 Stalwart image. Details and field reports: [Status](docs/status.md).
-
-## Documentation
-
-| | |
-| --- | --- |
-| [Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/) | The whole upgrade, step by step, on docs.ihasmail.org |
-| [docs/rehearsal.md](docs/rehearsal.md) | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
-| [docs/docker.md](docs/docker.md) | Container deployments: flags, what cutover carries and refuses, where the config goes |
-| [docs/known-stalwart-problems.md](docs/known-stalwart-problems.md) | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
-| [docs/recovery.md](docs/recovery.md) | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
-| [docs/status.md](docs/status.md) | Command and package state, validation, field reports |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The design: phases, checkpoints, and the reasoning behind them |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, and where the design is written down |
 
 ## License
 
