@@ -13,6 +13,9 @@ import (
 	"os"
 )
 
+// version is set at build time: -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -33,6 +36,8 @@ func main() {
 		err = runStatus(os.Args[2:])
 	case "report":
 		err = runReport(os.Args[2:])
+	case "version", "--version":
+		fmt.Println("stalwart-migrate", version)
 	default:
 		usage()
 		os.Exit(1)
@@ -53,5 +58,6 @@ commands:
   run         perform the migration (needs --yes and --recovery-point-confirmed)
   tenants     show which tenant owns which domain, and what blocks a migration (read-only)
   status      show the state of an in-progress or completed run
-  report      print the validation report for a run`)
+  report      print the validation report for a run
+  version     print the version of this binary`)
 }

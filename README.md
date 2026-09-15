@@ -1,5 +1,6 @@
 # stalwart-migrator
 
+[![Latest release](https://img.shields.io/github/v/release/Coffey-Labs/stalwart-migrator?sort=date)](https://github.com/Coffey-Labs/stalwart-migrator/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Docs: docs.ihasmail.org](https://img.shields.io/badge/docs-docs.ihasmail.org-0ea5e9)](https://docs.ihasmail.org/install/stalwart-migrator/)
 
@@ -30,17 +31,17 @@ it needs.
 | 🛟 **[Recovery](docs/recovery.md)** | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
 | 📊 **[Status](docs/status.md)** | Command and package state, validation, field reports |
 | ⚙️ **[Architecture](ARCHITECTURE.md)** | The design: phases, checkpoints, and the reasoning behind them |
-| 🔧 **[Contributing](CONTRIBUTING.md)** | Building, testing, and where the design is written down |
+| 🔧 **[Contributing](CONTRIBUTING.md)** | Building, testing, releases, and where the design is written down |
 
 ## Requirements
 
-- Stalwart **0.15.5**, as a systemd service or a single Docker container
+- Linux (amd64 or arm64) with Stalwart **0.15.5**, as a systemd service or a
+  single Docker container
 - root on the mail server
 - `python3`, for Stalwart's own `migrate_v016.py`
 - `stalwart-cli` **1.0.2 or later**, a separate download from the server
 - an administrator account **in Stalwart's directory** — not the
   `fallback-admin` from `config.toml`, which does not survive the migration
-- Go **1.26 or newer**, to build
 
 ## Fix these on the server first
 
@@ -55,13 +56,20 @@ Both stop a migration, and `preflight` refuses on both:
 
 Details: [Known Stalwart problems](docs/known-stalwart-problems.md).
 
-## Build
+## Install
 
 ```sh
-git clone https://github.com/Coffey-Labs/stalwart-migrator.git
-cd stalwart-migrator
-go build -o stalwart-migrate ./cmd/stalwart-migrate
+ARCH=amd64   # or arm64
+curl -fsSLO https://github.com/Coffey-Labs/stalwart-migrator/releases/latest/download/stalwart-migrate-linux-$ARCH.tar.gz
+curl -fsSLO https://github.com/Coffey-Labs/stalwart-migrator/releases/latest/download/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+tar -xzf stalwart-migrate-linux-$ARCH.tar.gz
+sudo install -m 0755 stalwart-migrate /usr/local/bin/
+stalwart-migrate version
 ```
+
+Or build from source with Go 1.26.8 or newer:
+`go build -o stalwart-migrate ./cmd/stalwart-migrate`.
 
 ## Use
 
@@ -70,20 +78,20 @@ Give the admin password with `--admin-password` or
 
 ```sh
 # 1. Read-only checks and a migration plan
-sudo ./stalwart-migrate preflight --admin-url https://mail.example.com --admin-user admin@example.com
+sudo stalwart-migrate preflight --admin-url https://mail.example.com --admin-user admin@example.com
 
 # 2. Read-only: convert your settings and report what won't carry over
-sudo ./stalwart-migrate rehearse --admin-url https://mail.example.com --admin-user admin@example.com
+sudo stalwart-migrate rehearse --admin-url https://mail.example.com --admin-user admin@example.com
 
 # 3. Rehearse the real migration on a clone of the server (strongly recommended)
 
 # 4. Migrate, once you have a snapshot you have checked you can restore
-sudo ./stalwart-migrate run --admin-url https://mail.example.com --admin-user admin@example.com \
+sudo stalwart-migrate run --admin-url https://mail.example.com --admin-user admin@example.com \
     --recovery-point-confirmed --yes
 
 # Afterwards
-sudo ./stalwart-migrate status <run-id>     # which steps completed
-sudo ./stalwart-migrate report <run-id>     # what validation found
+sudo stalwart-migrate status <run-id>     # which steps completed
+sudo stalwart-migrate report <run-id>     # what validation found
 ```
 
 A Docker container also needs `--container-path-unproven` and `--target-image`;
