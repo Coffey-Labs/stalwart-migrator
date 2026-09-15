@@ -1,5 +1,8 @@
 # stalwart-migrator
 
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+[![Docs: docs.ihasmail.org](https://img.shields.io/badge/docs-docs.ihasmail.org-0ea5e9)](https://docs.ihasmail.org/install/stalwart-migrator/)
+
 In-place upgrade tool for Stalwart Mail Server, 0.15.5 → 0.16: no data loss, a
 checkpoint at every step so an interrupted run resumes instead of restarting,
 and automated validation that the server still works afterwards. Go, standard
@@ -16,9 +19,18 @@ it needs.
 > checked. `run` will not start until you confirm you have one. See
 > [Recovery](docs/recovery.md).
 
-**Full guide:** [docs.ihasmail.org/install/stalwart-migrator](https://docs.ihasmail.org/install/stalwart-migrator/)
-walks through the whole upgrade — what to fix first, rehearsing, running it,
-and what to check afterwards.
+## Documentation
+
+| | |
+| --- | --- |
+| 📘 **[Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/)** | **Start here.** The whole upgrade, step by step, on docs.ihasmail.org: what to fix first, rehearsing, running it, and what to check afterwards |
+| 🧪 **[Rehearsing](docs/rehearsal.md)** | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
+| 🐳 **[Docker](docs/docker.md)** | Container deployments: flags, what cutover carries and refuses, where the config goes |
+| ⚠️ **[Known Stalwart problems](docs/known-stalwart-problems.md)** | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
+| 🛟 **[Recovery](docs/recovery.md)** | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
+| 📊 **[Status](docs/status.md)** | Command and package state, validation, field reports |
+| ⚙️ **[Architecture](ARCHITECTURE.md)** | The design: phases, checkpoints, and the reasoning behind them |
+| 🔧 **[Contributing](CONTRIBUTING.md)** | Building, testing, and where the design is written down |
 
 ## Requirements
 
@@ -87,19 +99,6 @@ downtime) and, in another operator's hands, three more. Two things are still
 open: some store migrations need one more recovery-mode boot, which is a manual
 step, and the Docker path has never completed a migration against a real
 Stalwart image. Details and field reports: [Status](docs/status.md).
-
-## Documentation
-
-| | |
-| --- | --- |
-| [Upgrade guide](https://docs.ihasmail.org/install/stalwart-migrator/) | The whole upgrade, step by step, on docs.ihasmail.org |
-| [docs/rehearsal.md](docs/rehearsal.md) | Running preflight safely, what `rehearse` reports, rehearsing on a clone |
-| [docs/docker.md](docs/docker.md) | Container deployments: flags, what cutover carries and refuses, where the config goes |
-| [docs/known-stalwart-problems.md](docs/known-stalwart-problems.md) | Tenants, the admin account, dropped ACME, certificates on mail ports, the extra recovery boot |
-| [docs/recovery.md](docs/recovery.md) | Why recovery is your snapshot, what the tool keeps, never booting recovery mode again |
-| [docs/status.md](docs/status.md) | Command and package state, validation, field reports |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The design: phases, checkpoints, and the reasoning behind them |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, and where the design is written down |
 
 ## License
 
