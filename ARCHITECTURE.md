@@ -1,6 +1,8 @@
 # stalwart-migrator — Architecture
 
-Status: design, no implementation yet.
+Status: the design record, written before the implementation and kept for
+the reasoning. The tool is implemented; [docs/status.md](docs/status.md) says
+what works today, and where this file and the code disagree, the code wins.
 Scope: upgrade a Stalwart Mail Server in place from **0.15.5** to the current
 latest release (**0.16.14** as of 2026-08-19) with no data loss, a working
 a recovery point the operator provides, and an automated post-migration
