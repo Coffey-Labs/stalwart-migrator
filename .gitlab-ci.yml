@@ -1,0 +1,101 @@
+# CI on the self-hosted GitLab, ported from .github/workflows/release.yml when
+# the GitHub account was suspended on 2026-09-20. The Actions file stays in the
+# tree: it is the reference this was written from and works unchanged if the
+# appeal succeeds.
+#
+# The shape is the same -- tag-driven, amd64 and arm64, reproducible -- but the
+# publishing half is necessarily different. There is no `gh release`, so the
+# tarballs go to this project's generic package registry and the Release is
+# created with release-cli, linking to them. The docs guide installs from
+# release assets, so those links are the part that has to keep working.
+#
+# Images are pinned by digest, with the tag in the trailing comment: the
+# replacement for the workflow's SHA-pinned actions, since GitLab has no
+# action allowlist.
+
+stages: [test, build, release]
+
+variables:
+  PKG: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalwart-migrate"
+
+default:
+  interruptible: true
+
+.go: &go
+  image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+  cache:
+    key: go-mod
+    paths: [.gocache/]
+  variables:
+    GOPATH: "$CI_PROJECT_DIR/.gocache"
+
+test:
+  <<: *go
+  stage: test
+  script:
+    - go vet ./...
+    - go test ./...
+    # Kept as `go run ...@latest` exactly as the workflow had it: the point of
+    # a vulnerability check is to use today's database, not a pinned copy of
+    # last month's.
+    - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+build:
+  <<: *go
+  stage: build
+  needs: [test]
+  script:
+    # The workflow refused to release a tag that is not an ancestor of main,
+    # so that a release can never describe code that was never reviewed onto
+    # the default branch. GIT_DEPTH is unset below to make the ancestry
+    # available -- a shallow clone cannot answer this.
+    - git fetch --quiet origin "$CI_DEFAULT_BRANCH"
+    - |
+      git merge-base --is-ancestor "$(git rev-parse "${CI_COMMIT_TAG}^{commit}")" "origin/$CI_DEFAULT_BRANCH" \
+        || { echo "!! $CI_COMMIT_TAG is not on $CI_DEFAULT_BRANCH"; exit 1; }
+    # SOURCE_DATE_EPOCH is what makes the tarballs reproducible: without it
+    # every build stamps a new mtime and two builds of one tag differ.
+    - SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$CI_COMMIT_TAG")" scripts/build-release.sh "$CI_COMMIT_TAG" dist
+    - sha256sum dist/*.tar.gz
+  variables:
+    GIT_DEPTH: "0"
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:latest@sha256:3f0a591b3b96c39ac8e28480ee99bb93201b7bcea1fbca7ed50c034098111db2 # latest
+  needs: [build]
+  script:
+    # Upload first, then create the Release pointing at what was uploaded. A
+    # Release whose assets 404 is worse than no Release: the install guide
+    # sends people straight at these URLs.
+    - |
+      set -eu
+      for f in dist/*; do
+        n=$(basename "$f")
+        echo "uploading $n"
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" \
+          "${PKG}/${CI_COMMIT_TAG}/${n}"
+      done
+    - |
+      set -eu
+      args=""
+      for f in dist/*; do
+        n=$(basename "$f")
+        args="$args --assets-link {\"name\":\"${n}\",\"url\":\"${PKG}/${CI_COMMIT_TAG}/${n}\"}"
+      done
+      # shellcheck disable=SC2086
+      release-cli create --name "$CI_COMMIT_TAG" --tag-name "$CI_COMMIT_TAG" \
+        --description "Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS." $args
+  rules:
+    - if: $CI_COMMIT_TAG
