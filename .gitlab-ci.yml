@@ -92,7 +92,14 @@ release:
       args=""
       for f in dist/*; do
         n=$(basename "$f")
-        args="$args --assets-link {\"name\":\"${n}\",\"url\":\"${PKG}/${CI_COMMIT_TAG}/${n}\"}"
+        # direct_asset_path is what makes the permalink work. Without it the
+        # only stable URL is the package registry one, which carries the tag
+        # and so cannot be a "latest" link. With it, every release exposes
+        #   /-/releases/permalink/latest/downloads/binaries/<file>
+        # which is the GitLab equivalent of the GitHub
+        # /releases/latest/download/<file> URL the install guide has always
+        # used. Changing this path breaks documented install commands.
+        args="$args --assets-link {\"name\":\"${n}\",\"url\":\"${PKG}/${CI_COMMIT_TAG}/${n}\",\"direct_asset_path\":\"/binaries/${n}\"}"
       done
       # shellcheck disable=SC2086
       release-cli create --name "$CI_COMMIT_TAG" --tag-name "$CI_COMMIT_TAG" \
