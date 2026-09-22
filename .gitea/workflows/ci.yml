@@ -1,0 +1,96 @@
+# CI on the self-hosted Gitea, ported from .gitlab-ci.yml during the move off
+# GitLab (2026-09-22). Gitea reads .gitea/workflows and ignores .github/ once
+# this directory exists; .github/workflows stays as it was for GitHub.
+#
+# Every job runs in an image pinned by digest (tag in the trailing comment),
+# and the only action used is coffey-labs/actions/checkout pinned by SHA. The
+# instance resolves short `uses:` against itself, never GitHub, so nothing
+# unreviewed can be pulled in.
+#
+# The shape is the same as before -- tag-driven, amd64 and arm64,
+# reproducible. GitLab needed a generic package registry plus release-cli
+# links; Gitea attaches the tarballs to the Release itself, as GitHub did, so
+# the build and the release are one job and nothing is handed between jobs.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+    steps:
+      - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
+      - run: go vet ./...
+      - run: go test ./...
+      # Kept as `go run ...@latest` exactly as the workflow had it: the point
+      # of a vulnerability check is to use today's database, not a pinned copy
+      # of last month's.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [test]
+    runs-on: docker
+    container:
+      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+    steps:
+      # Full history: the ancestry check below cannot be answered from a
+      # shallow clone. The checkout also fetches every branch as origin/*.
+      - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
+        with:
+          fetch-depth: 0
+      # The workflow refused to release a tag that is not an ancestor of main,
+      # so that a release can never describe code that was never reviewed onto
+      # the default branch.
+      - shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor "$(git rev-parse "${TAG}^{commit}")" origin/main \
+            || { echo "!! $TAG is not on main"; exit 1; }
+      # SOURCE_DATE_EPOCH is what makes the tarballs reproducible: without it
+      # every build stamps a new mtime and two builds of one tag differ.
+      - shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$TAG")" scripts/build-release.sh "$TAG" dist
+          sha256sum dist/*.tar.gz
+      # Create the Release, then attach every file. Archive names carry no
+      # version, so /releases/latest/download/<name> always means the newest.
+      # The API is reached on the internal address so the uploads never cross
+      # Cloudflare. If an upload fails the half-made Release is deleted: a
+      # Release whose assets 404 is worse than no Release, since the install
+      # guide sends people straight at these URLs.
+      - shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # CI_SERVER_INTERNAL is set on every job container by the runner.
+          API="$CI_SERVER_INTERNAL/api/v1/repos/$REPO"
+          auth=(--header "Authorization: token $TOKEN")
+          id=$(curl --fail --silent --show-error "${auth[@]}" \
+                --header "Content-Type: application/json" \
+                --data "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":\"Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS.\"}" \
+                "$API/releases" | grep -o '^{"id":[0-9]*' | cut -d: -f2)
+          [ -n "$id" ] || { echo "!! could not create the release"; exit 1; }
+          for f in dist/*; do
+            n=$(basename "$f")
+            echo "uploading $n"
+            curl --fail --silent --show-error --output /dev/null "${auth[@]}" \
+              --form "attachment=@$f" "$API/releases/$id/assets?name=$n" \
+              || { curl --silent "${auth[@]}" -X DELETE "$API/releases/$id"; exit 1; }
+          done
