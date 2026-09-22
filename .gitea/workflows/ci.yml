@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: docker
+    runs-on: light
     container:
       image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
     steps:
@@ -40,7 +40,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [test]
-    runs-on: docker
+    runs-on: light
     container:
       image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
     steps:
