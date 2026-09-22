@@ -1,6 +1,6 @@
 # stalwart-migrator
 
-[![Latest release](https://img.shields.io/github/v/release/Coffey-Labs/stalwart-migrator?sort=date)](https://github.com/Coffey-Labs/stalwart-migrator/releases/latest)
+[![Latest release](https://img.shields.io/gitea/v/release/coffey-labs/stalwart-migrator?gitea_url=https%3A%2F%2Fgit.coffeylabs.org)](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Docs: docs.ihasmail.org](https://img.shields.io/badge/docs-docs.ihasmail.org-0ea5e9)](https://docs.ihasmail.org/install/stalwart-migrator/)
 
@@ -9,7 +9,7 @@ checkpoint at every step so an interrupted run resumes instead of restarting,
 and automated validation that the server still works afterwards. Go, standard
 library only.
 
-A companion to [**ihasmail**](https://github.com/Coffey-Labs/ihasmail), a
+A companion to [**ihasmail**](https://git.coffeylabs.org/coffey-labs/ihasmail), a
 JMAP-first webmail client for Stalwart. That one is what you read your mail in;
 this one gets the server underneath it onto a version that speaks the protocol
 it needs.
@@ -60,8 +60,8 @@ Details: [Known Stalwart problems](docs/known-stalwart-problems.md).
 
 ```sh
 ARCH=amd64   # or arm64
-curl -fsSLO https://github.com/Coffey-Labs/stalwart-migrator/releases/latest/download/stalwart-migrate-linux-$ARCH.tar.gz
-curl -fsSLO https://github.com/Coffey-Labs/stalwart-migrator/releases/latest/download/SHA256SUMS
+curl -fsSLO https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases/download/latest/stalwart-migrate-linux-$ARCH.tar.gz
+curl -fsSLO https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases/download/latest/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 tar -xzf stalwart-migrate-linux-$ARCH.tar.gz
 sudo install -m 0755 stalwart-migrate /usr/local/bin/

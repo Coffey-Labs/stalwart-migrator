@@ -27,7 +27,7 @@ write access to the checkpoint directory.
 Releases are tagged by date, like ihasmail's: `v2026.9.15`, with `.1`, `.2`
 added for another release the same day. Binaries for `linux/amd64` and
 `linux/arm64` and a `SHA256SUMS` file are attached to every
-[release](https://github.com/Coffey-Labs/stalwart-migrator/releases).
+[release](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases).
 
 Every release is built by the [release workflow](.github/workflows/release.yml)
 from a tagged commit on `main`, after the tests and a known-vulnerabilities
