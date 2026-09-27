@@ -94,3 +94,17 @@ jobs:
               --form "attachment=@$f" "$API/releases/$id/assets?name=$n" \
               || { curl --silent "${auth[@]}" -X DELETE "$API/releases/$id"; exit 1; }
           done
+
+  # The release above is made with the job's own token, and Gitea starts no
+  # workflow for events the Actions bot causes -- announce.yml's
+  # 'on: release' never fires for it -- so announce it from here.
+  announce:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: light
+    steps:
+      - uses: coffey-labs/actions/discourse-release@e9293996e2efa770839121fa8f8da93083f216be
+        with:
+          api-key: ${{ secrets.DISCOURSE_RELEASE_KEY }}
+          discord-webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          tag: ${{ github.ref_name }}
