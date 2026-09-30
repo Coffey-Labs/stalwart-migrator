@@ -125,12 +125,15 @@ jobs:
             [ -n "$id" ] || { echo "::error::could not create the release"; exit 1; }
             created=1
           fi
-          have="$(curl -fsS "${auth[@]}" "$API/releases/$id/assets" | jq -r '.[].name')"
+          # The uploads cross Cloudflare, which dropped 50 MB HTTP/2 uploads
+          # part-way for inbuxa-server v2026.9.30.1 (curl 92). HTTP/1.1, and retry.
+          retry=(--retry 5 --retry-all-errors --retry-delay 15)
+          have="$(curl -fsS "${retry[@]}" "${auth[@]}" "$API/releases/$id/assets" | jq -r '.[].name')"
           for f in dist/*; do
             n="$(basename "$f")"
             if grep -qxF "$n" <<<"$have"; then echo "already attached: $n"; continue; fi
             echo "uploading $n"
-            curl -fsS -o /dev/null "${auth[@]}" --form "attachment=@$f" "$API/releases/$id/assets?name=$n" || {
+            curl -fsS --http1.1 "${retry[@]}" -o /dev/null "${auth[@]}" --form "attachment=@$f" "$API/releases/$id/assets?name=$n" || {
               [ "$created" = 1 ] && curl -sS -o /dev/null "${auth[@]}" -X DELETE "$API/releases/$id"
               exit 1
             }
