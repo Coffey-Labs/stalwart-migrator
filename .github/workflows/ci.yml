@@ -82,7 +82,8 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   release:
-    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag'
+    # v* tags only, as on Gitea: any other tag pushed by hand is not a release.
+    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     needs: [test]
     runs-on: ubuntu-latest
     env:
