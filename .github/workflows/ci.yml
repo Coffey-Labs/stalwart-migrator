@@ -1,0 +1,154 @@
+# CI on GitHub Actions, for the GitHub copy of this repository.
+#
+# The repository lives on the self-hosted Gitea; GitHub holds a push mirror
+# that Gitea updates on every commit. Nothing is merged here -- pull requests
+# happen on Gitea, and their branches reach GitHub as ordinary pushes, which is
+# why this workflow runs on `push` and not on `pull_request`.
+#
+# Which forge does the building is one switch, the variable BUILD_ON, set on
+# both forges at the organization level:
+#
+#   BUILD_ON=github  every job here runs; .gitea/workflows/ci.yml skips its own
+#                    test and release jobs and waits for the status this
+#                    workflow reports back instead.
+#   unset / other    every job here skips; Gitea builds as it always has.
+#
+# The result goes back to Gitea as one commit status, "github/ci (branch)" or
+# "github/ci (tag)", which is what Gitea's `github` job waits on.
+#
+# Tags do what the Gitea release job does: check the tag is on main, build
+# the reproducible archives, and attach them to the Gitea Release -- Gitea is
+# where the install guide points, so that is where the files go. The Release
+# is created as a draft, filled, then published, so it is never visible with
+# assets missing; if an upload fails, a Release this run created is deleted.
+# Gitea announces the release once this run has reported success.
+#
+# Go cross-compiles both architectures from one amd64 runner, so there is no
+# arm64 job.
+#
+# Configuration, all at the organization level on GitHub: variables BUILD_ON,
+# GITEA_URL; secret GITEA_TOKEN (write:repository on Gitea).
+#
+# Every `uses:` is pinned to a full commit SHA, with the release it was in the
+# trailing comment. Nothing schedules here: schedules belong to Gitea.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  # For a run GitHub queued and then orphaned. Run it from a tag to redo that
+  # tag's release; attaching skips any file already on the Release.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+env:
+  GITEA_URL: ${{ vars.GITEA_URL }}
+  CONTEXT: github/ci (${{ github.ref_type }})
+
+jobs:
+  # Tells Gitea a result is on its way, so a status that is still missing
+  # reads as "running" rather than "never started".
+  pending:
+    if: vars.BUILD_ON == 'github'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          curl -fsS -o /dev/null -X POST -H "Authorization: token $GITEA_TOKEN" -H 'Content-Type: application/json' \
+            "$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$(jq -n --arg c "$CONTEXT" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                  '{state:"pending", context:$c, target_url:$u, description:"GitHub Actions"}')"
+
+  test:
+    if: vars.BUILD_ON == 'github'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      # `@latest` on purpose: a vulnerability check should use today's
+      # database, not a pinned copy of last month's.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  release:
+    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag'
+    needs: [test]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      # Full history: the ancestry check cannot be answered from a shallow
+      # clone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # A release can never describe code that was not reviewed onto main.
+      - run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$(git rev-parse "${TAG}^{commit}")" origin/main \
+            || { echo "::error::$TAG is not on main"; exit 1; }
+      # SOURCE_DATE_EPOCH makes the tarballs reproducible: two builds of one
+      # tag give byte-identical archives.
+      - run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$TAG")" scripts/build-release.sh "$TAG" dist
+          sha256sum dist/*.tar.gz
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          API="$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY"
+          auth=(-H "Authorization: token $GITEA_TOKEN")
+          # Reuse the Release if the tag already has one (a re-run), else make a
+          # draft of our own.
+          created=0
+          id="$(curl -fsS "${auth[@]}" "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
+          if [ -z "$id" ]; then
+            id="$(curl -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+                  -d "$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, draft:true,
+                        body:"Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."}')" \
+                  "$API/releases" | jq -r '.id // empty')"
+            [ -n "$id" ] || { echo "::error::could not create the release"; exit 1; }
+            created=1
+          fi
+          have="$(curl -fsS "${auth[@]}" "$API/releases/$id/assets" | jq -r '.[].name')"
+          for f in dist/*; do
+            n="$(basename "$f")"
+            if grep -qxF "$n" <<<"$have"; then echo "already attached: $n"; continue; fi
+            echo "uploading $n"
+            curl -fsS -o /dev/null "${auth[@]}" --form "attachment=@$f" "$API/releases/$id/assets?name=$n" || {
+              [ "$created" = 1 ] && curl -sS -o /dev/null "${auth[@]}" -X DELETE "$API/releases/$id"
+              exit 1
+            }
+          done
+          if [ "$created" = 1 ]; then
+            curl -fsS -o /dev/null "${auth[@]}" -H 'Content-Type: application/json' -X PATCH \
+              -d '{"draft":false}' "$API/releases/$id"
+          fi
+
+  report:
+    if: always() && vars.BUILD_ON == 'github'
+    needs: [pending, test, release]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          STATE: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}
+        run: |
+          curl -fsS -o /dev/null -X POST -H "Authorization: token $GITEA_TOKEN" -H 'Content-Type: application/json' \
+            "$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$(jq -n --arg s "$STATE" --arg c "$CONTEXT" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                  '{state:$s, context:$c, target_url:$u, description:"GitHub Actions"}')"
