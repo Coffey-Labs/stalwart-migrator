@@ -1,6 +1,6 @@
 # CI on the self-hosted Gitea, ported from .gitlab-ci.yml during the move off
 # GitLab (2026-09-22). Gitea reads .gitea/workflows and ignores .github/ once
-# this directory exists; .github/workflows stays as it was for GitHub.
+# this directory exists; .github/workflows is GitHub's side of the switch below.
 #
 # Every job runs in an image pinned by digest (tag in the trailing comment),
 # and the only action used is coffey-labs/actions/checkout pinned by SHA. The
@@ -11,6 +11,16 @@
 # reproducible. GitLab needed a generic package registry plus release-cli
 # links; Gitea attaches the tarballs to the Release itself, as GitHub did, so
 # the build and the release are one job and nothing is handed between jobs.
+#
+# BUILD ON GITHUB. The org variable BUILD_ON decides which forge builds.
+# Unset (or anything but 'github'), the test and release jobs below run here,
+# as they always have. Set to 'github', they skip and .github/workflows/ci.yml
+# does the same work on GitHub's runners -- GitHub holds a push mirror of this
+# repository, updated on every commit -- and reports back as the commit status
+# "github/ci (branch)" or "github/ci (tag)". The `github` job waits for that
+# status and passes or fails with it, so a run here still says whether the
+# commit is good. If GitHub is ever unavailable, unset BUILD_ON and everything
+# builds here again.
 name: ci
 
 on:
@@ -25,6 +35,7 @@ concurrency:
 
 jobs:
   test:
+    if: ${{ vars.BUILD_ON != 'github' }}
     runs-on: light
     container:
       image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
@@ -38,7 +49,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: ${{ vars.BUILD_ON != 'github' && startsWith(github.ref, 'refs/tags/') }}
     needs: [test]
     runs-on: light
     container:
@@ -95,12 +106,51 @@ jobs:
               || { curl --silent "${auth[@]}" -X DELETE "$API/releases/$id"; exit 1; }
           done
 
+  # Stands in for test and release while GitHub builds: waits for the status
+  # GitHub's ci.yml posts on this commit and passes or fails with it. A pull
+  # request is checked at its head commit, which is what GitHub built when
+  # the branch reached the mirror. Two and a half hours covers a slow queue;
+  # a timeout here with BUILD_ON=github usually means GitHub never got the
+  # push -- check the mirror's last error in the repository settings.
+  github:
+    if: ${{ vars.BUILD_ON == 'github' }}
+    runs-on: light
+    timeout-minutes: 150
+    container:
+      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+    steps:
+      - shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends jq >/dev/null
+          ctx="github/ci (branch)"; [ "$IS_TAG" = true ] && ctx="github/ci (tag)"
+          echo "waiting for '$ctx' on $SHA"
+          while :; do
+            s="$(curl -fsS -H "Authorization: token $TOKEN" \
+                  "$CI_SERVER_INTERNAL/api/v1/repos/$REPO/commits/$SHA/statuses?limit=50" \
+                  | jq -c --arg c "$ctx" '[.[] | select(.context == $c)] | sort_by(.id) | last // empty')" || s=""
+            state="$(printf '%s' "$s" | jq -r '.status // .state // empty')"
+            case "$state" in
+              success) echo "GitHub: success"; exit 0 ;;
+              failure|error) echo "GitHub: $state -- $(jq -r '.target_url' <<<"$s")"; exit 1 ;;
+            esac
+            sleep 20
+          done
+
   # The release above is made with the job's own token, and Gitea starts no
   # workflow for events the Actions bot causes -- announce.yml's
-  # 'on: release' never fires for it -- so announce it from here.
+  # 'on: release' never fires for it -- so announce it from here. When GitHub
+  # builds, the Release is made there and published only once its files are
+  # attached; this waits for GitHub's success and announces then. The action
+  # makes one topic per tag, so a second announce for the same tag is a no-op.
   announce:
-    needs: [release]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release, github]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && (needs.release.result == 'success' || needs.github.result == 'success') }}
     runs-on: light
     steps:
       - uses: coffey-labs/actions/discourse-release@e9293996e2efa770839121fa8f8da93083f216be
