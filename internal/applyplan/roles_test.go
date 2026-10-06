@@ -118,7 +118,7 @@ func TestAccountRolesReportsRolesItCannotMap(t *testing.T) {
 // local part"). The smoke instance used bare names and never exercised it.
 func TestAccountRolesUsesTheLocalPartOfAnEmailStyleName(t *testing.T) {
 	ops, _, warnings, err := AccountRoleOperations([]backup.Principal{
-		{Type: "individual", Name: "john@linuxexperts.net", Emails: []string{"john@linuxexperts.net"}, Roles: []string{"admin"}},
+		{Type: "individual", Name: "john@example.org", Emails: []string{"john@example.org"}, Roles: []string{"admin"}},
 	})
 	if err != nil {
 		t.Fatal(err)
