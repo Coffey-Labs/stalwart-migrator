@@ -114,7 +114,7 @@ Stalwart image. Details and field reports: [Status](docs/status.md).
 
 ## License
 
-Copyright (C) 2026 Coffey Labs. GPL-3.0-or-later: free software, with no
+Copyright (C) 2026 Coffey Labs LLC. GPL-3.0-or-later: free software, with no
 warranty. The full text is in [`LICENSE`](LICENSE).
 
 No third-party code is vendored — the tool is standard library only, and the
