@@ -38,7 +38,7 @@ jobs:
     if: ${{ vars.BUILD_ON != 'github' }}
     runs-on: light
     container:
-      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+      image: golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c # 1.26-bookworm
     steps:
       - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
       - run: go vet ./...
@@ -53,7 +53,7 @@ jobs:
     needs: [test]
     runs-on: light
     container:
-      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+      image: golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c # 1.26-bookworm
     steps:
       # Full history: the ancestry check below cannot be answered from a
       # shallow clone. The checkout also fetches every branch as origin/*.
@@ -119,7 +119,7 @@ jobs:
     runs-on: wait
     timeout-minutes: 150
     container:
-      image: golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d # 1.26-bookworm
+      image: golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c # 1.26-bookworm
     steps:
       - shell: bash
         env:
