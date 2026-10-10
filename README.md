@@ -3,10 +3,11 @@
 [![Latest release](https://img.shields.io/gitea/v/release/coffey-labs/stalwart-migrator?gitea_url=https%3A%2F%2Fgit.coffeylabs.org)](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Docs: docs.ihasmail.org](https://img.shields.io/badge/docs-docs.ihasmail.org-0ea5e9)](https://docs.ihasmail.org/install/stalwart-migrator/)
+[![Chat on Discord](https://img.shields.io/discord/1523538164084637797?label=discord&logo=discord&logoColor=white&color=5865f2)](https://discord.gg/nqcY4TKfAn)
 
 > [!NOTE]
 > Development happens on [git.coffeylabs.org/coffey-labs/stalwart-migrator](https://git.coffeylabs.org/coffey-labs/stalwart-migrator); the copy on GitHub is a read-only mirror.
-> Report issues at **[git.coffeylabs.org/coffey-labs/stalwart-migrator/issues](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/issues)**, and join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**.
+> Report issues at **[git.coffeylabs.org/coffey-labs/stalwart-migrator/issues](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/issues)**, join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**, or chat on **[Discord](https://discord.gg/nqcY4TKfAn)**.
 
 In-place upgrade tool for Stalwart Mail Server, 0.15.5 → 0.16: no data loss, a
 checkpoint at every step so an interrupted run resumes instead of restarting,
