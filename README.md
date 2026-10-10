@@ -3,6 +3,7 @@
 [![Latest release](https://img.shields.io/gitea/v/release/coffey-labs/stalwart-migrator?gitea_url=https%3A%2F%2Fgit.coffeylabs.org)](https://git.coffeylabs.org/coffey-labs/stalwart-migrator/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Docs: docs.ihasmail.org](https://img.shields.io/badge/docs-docs.ihasmail.org-0ea5e9)](https://docs.ihasmail.org/install/stalwart-migrator/)
+[![Forum: community.coffeylabs.org](https://img.shields.io/badge/forum-community.coffeylabs.org-0f766e)](https://community.coffeylabs.org/c/ihasmail/9)
 [![Chat on Discord](https://img.shields.io/discord/1523538164084637797?label=discord&logo=discord&logoColor=white&color=5865f2)](https://discord.gg/nqcY4TKfAn)
 
 > [!NOTE]
