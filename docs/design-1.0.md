@@ -36,7 +36,18 @@ and reported 48 warnings, all of them settings with no 1.0 equivalent. The
 final run took 31 seconds with 0 errors, and upstream's verification passed. A
 JMAP snapshot before and after was identical for account ids, mailboxes,
 message ids, threads, keywords, events, contacts and Sieve scripts. The only
-change was a `$hasnoattachment` keyword that 1.0 adds to every message.
+change was a keyword 1.0 adds to every message: `$hasattachment` or
+`$hasnoattachment`.
+
+A second rehearsal used PostgreSQL and more data: five accounts with 2,000
+messages each (400 with attachments, four folders, threads, flags), 200
+events, 300 contacts and five Sieve scripts. The first incremental `run`
+copied all 10,000 messages in 3.5 seconds while 0.16.27 kept serving.
+Changes made afterwards (new mail, flags, deletions) were picked up by a
+second incremental run, and changes after that by `run --final`, which took
+31 seconds, 30 of them spent confirming the source had stopped. Upstream's
+verification passed, and the same per-account snapshot of 10,090 messages
+matched apart from the keyword above.
 
 A copy engine that already works, keeps ids, and has its own rollback is not
 something to rebuild. This tool runs it as a separate, unmodified program
@@ -162,8 +173,8 @@ per account:
 - principals, domains and DKIM keys at server level
 
 Known, documented 1.0 differences are listed in one table in the code and
-reported as information, not failures. The first entry is the
-`$hasnoattachment` keyword. Upstream's own `verify` result is included in the
+reported as information, not failures. The first entries are the
+`$hasattachment` and `$hasnoattachment` keywords. Upstream's own `verify` result is included in the
 report, and a mismatch in either fails the run.
 
 After cutover the report prints what users will notice: OAuth clients sign
