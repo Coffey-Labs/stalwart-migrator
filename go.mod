@@ -1,3 +1,3 @@
 module github.com/Coffey-Labs/stalwart-migrator
 
-go 1.26.9
+go 1.26.10
