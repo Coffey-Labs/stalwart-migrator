@@ -114,6 +114,18 @@ open: some store migrations need one more recovery-mode boot, which is a manual
 step, and the Docker path has never completed a migration against a real
 Stalwart image. Details and field reports: [Status](docs/status.md).
 
+## Support
+
+| Upgrade | Status |
+| --- | --- |
+| 0.15.5 → 0.16.27 | Supported. `--target` defaults to 0.16.27, the last 0.16 release |
+| 0.16 → 1.0 | Not yet. The route is designed in [docs/design-1.0.md](docs/design-1.0.md) but not built, so the tool refuses a 1.0 target |
+| Anything else | Not supported |
+
+The 0.15.5 → 0.16 path gets bug and security fixes. If a Stalwart release
+changes its upgrade path in a way the tool can't follow, the tool refuses that
+target, and this table says so.
+
 ## License
 
 Copyright (C) 2026 Coffey Labs LLC. GPL-3.0-or-later: free software, with no

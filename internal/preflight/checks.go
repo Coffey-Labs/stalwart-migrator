@@ -179,6 +179,12 @@ func (c *Checker) Run(ctx context.Context, store *checkpoint.Store, rs *checkpoi
 				Detail: fmt.Sprintf("current version %s is already at or beyond target %s - nothing to migrate", curV, tgtV),
 			}, ""
 		}
+		if tgtV.Major >= 1 {
+			return CheckResult{
+				Status: StatusFail,
+				Detail: fmt.Sprintf("target %s is Stalwart 1.0 or later, which needs its data copied into a new store - this tool can't do that yet (docs/design-1.0.md); pass --target %s, the last 0.16 release", tgtV, DefaultTargetVersion),
+			}, ""
+		}
 		if curV.Major == 0 && curV.Minor < 16 && (tgtV.Major > 0 || tgtV.Minor >= 16) {
 			return CheckResult{
 				Status: StatusOK,

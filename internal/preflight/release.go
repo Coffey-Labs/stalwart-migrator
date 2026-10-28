@@ -14,6 +14,11 @@ import (
 
 // githubAPIBase is a var, not a const, so tests can point it at an
 // httptest server instead of hitting the real GitHub API.
+// DefaultTargetVersion is what --target defaults to: the last 0.16 release.
+// It was "latest" until Stalwart's latest became 1.0, which this tool can't
+// migrate to yet.
+const DefaultTargetVersion = "0.16.27"
+
 var githubAPIBase = "https://api.github.com/repos/stalwartlabs/stalwart/releases"
 
 type ReleaseAsset struct {
