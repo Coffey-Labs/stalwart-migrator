@@ -35,7 +35,7 @@ password with `--admin-password` or `STALWART_MIGRATE_ADMIN_PASSWORD`.
 
 ```sh
 stalwart-migrate rehearse --admin-url https://mail.example.com \
-    --admin-user admin --target 0.16.14
+    --admin-user admin --target 0.16.27
 ```
 
 It runs preflight, dumps your settings and principals, converts them with

@@ -20,7 +20,7 @@ goes double here.
 ## Flags
 
 - `--target-image` names the image in full, e.g.
-  `stalwartlabs/stalwart:v0.16.14`. It is never derived from the running
+  `stalwartlabs/stalwart:v0.16.27`. It is never derived from the running
   container by swapping the tag — that is wrong for a digest-pinned image, a
   mirror or a fork, and being wrong means pulling the wrong software into a
   mail server.
