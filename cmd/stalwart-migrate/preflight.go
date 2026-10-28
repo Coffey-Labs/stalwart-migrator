@@ -23,7 +23,7 @@ func runPreflight(args []string) error {
 	adminUser := fs.String("admin-user", "", "admin username for the reachability check")
 	adminPassword := fs.String("admin-password", os.Getenv("STALWART_MIGRATE_ADMIN_PASSWORD"),
 		"admin password for the reachability check (or set STALWART_MIGRATE_ADMIN_PASSWORD)")
-	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
+	targetVersion := fs.String("target", preflight.DefaultTargetVersion, `target Stalwart version, or "latest" (1.0 and later are refused for now)`)
 	targetBinary := fs.String("target-binary", "", "read the target version from this already-downloaded binary instead of the release API (for a host with no route to the internet)")
 	minFree := fs.Float64("min-free-multiple", 2.0, "required free disk space as a multiple of the data directory size")
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")

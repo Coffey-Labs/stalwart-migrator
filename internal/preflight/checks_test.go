@@ -607,3 +607,41 @@ func TestRehearseWarnsRatherThanBlocksOnAnUnrecreatableContainer(t *testing.T) {
 		t.Fatalf("advisory mode should not block, got:\n%s", report.String())
 	}
 }
+
+func TestLatestResolvingToStalwart1IsRefused(t *testing.T) {
+	// Since 2026-10-26 Stalwart's latest release is 1.0.0. A 0.16 server
+	// asked to go to "latest" would otherwise plan a patch bump: the new
+	// binary swapped in over a store it can't read.
+	fakeTool(t, "stalwart-cli", "stalwart-cli 1.0.12")
+	fakeTool(t, "python3", "Python 3.13.5")
+	binaryPath := writeFakeBinary(t, "0.16.22", filepath.Join(t.TempDir(), "invocations"))
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withFakeGithub(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(Release{TagName: "v1.0.0"})
+	})
+
+	store := checkpoint.NewStore(t.TempDir())
+	rs, err := store.Create("", "latest")
+	if err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	report, err := New(Options{
+		BinaryPath:    binaryPath,
+		ConfigPath:    configPath,
+		DataDir:       t.TempDir(),
+		TargetVersion: "latest",
+	}).Run(context.Background(), store, rs)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res := resultFor(t, report, "upgrade-direction")
+	if res.Status != StatusFail || !strings.Contains(res.Detail, DefaultTargetVersion) {
+		t.Errorf("upgrade-direction = %s %q, want a failure naming %s", res.Status, res.Detail, DefaultTargetVersion)
+	}
+	if !report.Blocking() {
+		t.Error("report should block a run that targets 1.0")
+	}
+}

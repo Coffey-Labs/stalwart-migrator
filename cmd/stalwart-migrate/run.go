@@ -61,7 +61,7 @@ func runRun(args []string) (err error) {
 	adminUser := fs.String("admin-user", "", "admin username - must be a directory account, not a config fallback-admin (see README)")
 	adminPassword := fs.String("admin-password", os.Getenv("STALWART_MIGRATE_ADMIN_PASSWORD"),
 		"admin password (or set STALWART_MIGRATE_ADMIN_PASSWORD)")
-	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
+	targetVersion := fs.String("target", preflight.DefaultTargetVersion, `target Stalwart version, or "latest" (1.0 and later are refused for now)`)
 	targetBinary := fs.String("target-binary", "", "use an already-downloaded target binary instead of fetching one")
 	targetImage := fs.String("target-image", "", "for a container deployment: the target image, named in full "+
 		"(e.g. stalwartlabs/stalwart:v0.16.14). Never guessed from the running container - a derived tag is wrong for a "+

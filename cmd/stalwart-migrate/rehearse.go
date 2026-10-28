@@ -48,7 +48,7 @@ func runRehearse(args []string) (err error) {
 	adminUser := fs.String("admin-user", "", "admin username")
 	adminPassword := fs.String("admin-password", os.Getenv("STALWART_MIGRATE_ADMIN_PASSWORD"),
 		"admin password (or set STALWART_MIGRATE_ADMIN_PASSWORD)")
-	targetVersion := fs.String("target", "latest", `target Stalwart version, or "latest"`)
+	targetVersion := fs.String("target", preflight.DefaultTargetVersion, `target Stalwart version, or "latest" (1.0 and later are refused for now)`)
 	stateDir := fs.String("state-dir", checkpoint.DefaultBaseDir, "directory to store run checkpoints in")
 	workDir := fs.String("work-dir", "/var/lib/stalwart-migrator/work", "scratch directory for the dumps and converted plan (cleaned up afterward - see --keep-artifacts)")
 	pythonPath := fs.String("python", "python3", "path to python3")

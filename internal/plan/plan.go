@@ -103,6 +103,13 @@ func Decide(sourceVersion, targetVersion string) (*Plan, error) {
 	if src.Compare(tgt) >= 0 {
 		return nil, fmt.Errorf("plan: source %s is already at or beyond target %s - nothing to migrate", src, tgt)
 	}
+	// 1.0 can't run on a 0.16 store: it needs the data copied into a new
+	// one, which this tool doesn't do yet (docs/design-1.0.md). Treating
+	// 0.16 -> 1.0 as a patch bump would swap the binary over a store it
+	// can't read.
+	if tgt.Major >= 1 {
+		return nil, fmt.Errorf("plan: target %s is Stalwart 1.0 or later, which this tool can't migrate to yet - target 0.16.27, the last 0.16 release", tgt)
+	}
 
 	crosses := src.Major == 0 && src.Minor < 16 && (tgt.Major > 0 || tgt.Minor >= 16)
 	if crosses {

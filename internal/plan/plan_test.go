@@ -52,15 +52,18 @@ func TestDecideRefusesRegression(t *testing.T) {
 	}
 }
 
-func TestDecideFutureMajorCrossesBoundaryToo(t *testing.T) {
-	// A hypothetical 0.15.x -> 1.0.0 jump should still be treated as
-	// crossing the boundary this tool knows how to automate.
-	p, err := Decide("0.15.9", "1.0.0")
-	if err != nil {
-		t.Fatalf("Decide: %v", err)
+func TestDecideRefusesStalwart1(t *testing.T) {
+	// This used to accept 0.15.x -> 1.0.0 as one more crossing of the
+	// 0.15/0.16 boundary. Stalwart 1.0 shipped needing its data copied into
+	// a new store, which no plan here does, so both routes to it are
+	// refused - 0.16.x -> 1.0.0 would otherwise pass as a patch bump.
+	for _, src := range []string{"0.15.5", "0.16.22", "0.16.27"} {
+		if p, err := Decide(src, "1.0.0"); err == nil {
+			t.Errorf("Decide(%s, 1.0.0) = %+v, want a refusal", src, p)
+		}
 	}
-	if !p.CrossesMajorBoundary {
-		t.Error("CrossesMajorBoundary = false, want true for 0.15.9 -> 1.0.0")
+	if _, err := Decide("0.15.5", "0.16.27"); err != nil {
+		t.Errorf("Decide(0.15.5, 0.16.27): %v", err)
 	}
 }
 
